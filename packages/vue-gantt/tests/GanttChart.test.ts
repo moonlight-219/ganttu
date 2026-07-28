@@ -136,10 +136,11 @@ describe("GanttChart", () => {
   })
 
   it("moves the task bar during drag preview instead of waiting for pointerup", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
-        callback(0)
-        return 1
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
       })
     const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
       .mockImplementation(() => undefined)
@@ -156,13 +157,124 @@ describe("GanttChart", () => {
     })
 
     const taskBar = wrapper.find(".gantt-bar.task")
+    const planBarStyle = wrapper.find(".gantt-plan-bar.task").attributes("style")
     expect(taskBar.attributes("style")).toContain("translate(120px")
 
     await taskBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await taskBar.trigger("pointermove", { clientX: 114, pointerId: 1 })
+    rafCallbacks.shift()?.(0)
+    await nextTick()
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(120px")
+    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toBe(planBarStyle)
+    expect(wrapper.find(".gantt-drag-preview").exists()).toBe(false)
+
     await taskBar.trigger("pointermove", { clientX: 160, pointerId: 1 })
+    rafCallbacks.shift()?.(16)
     await nextTick()
 
     expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(180px")
+    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toBe(planBarStyle)
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("keeps constrained successor drags at the allowed dependency boundary", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const linkedTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-05", end: "2026-07-07" },
+        actual: { start: "2026-07-05", end: "2026-07-07", progress: 40 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-07", end: "2026-07-09" },
+        actual: { start: "2026-07-07", end: "2026-07-09", progress: 20 }
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "SS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+
+    const targetBar = wrapper.findAll(".gantt-bar.task")[1]
+    await targetBar.trigger("pointerdown", { clientX: 200, pointerId: 1 })
+    await targetBar.trigger("pointermove", { clientX: 80, pointerId: 1 })
+    rafCallbacks.shift()?.(0)
+    await nextTick()
+
+    expect(wrapper.findAll(".gantt-bar.task")[1].attributes("style")).toContain("translate(210px")
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("keeps dependency lines aligned with the dragged task preview", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const linkedTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-08", end: "2026-07-10" },
+        actual: { start: "2026-07-08", end: "2026-07-10", progress: 20 }
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "FS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+
+    const initialPoints = wrapper.find(".gantt-link-hit").attributes("points")
+    expect(wrapper.find(".gantt-link-path").exists()).toBe(true)
+    const sourceBar = wrapper.findAll(".gantt-bar.task")[0]
+    await sourceBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await sourceBar.trigger("pointermove", { clientX: 160, pointerId: 1 })
+    rafCallbacks.shift()?.(0)
+    await nextTick()
+
+    expect(wrapper.find(".gantt-link-hit").attributes("points")).not.toBe(initialPoints)
+    expect(wrapper.find(".gantt-link-hit").attributes("points")?.startsWith("300,")).toBe(true)
 
     requestAnimationFrame.mockRestore()
     cancelAnimationFrame.mockRestore()
@@ -193,6 +305,7 @@ describe("GanttChart", () => {
   })
 
   it("shows a themed task detail card when hovering table rows and timeline bars", async () => {
+    vi.useFakeTimers()
     const wrapper = mount(GanttChart, {
       props: {
         tasks,
@@ -202,6 +315,9 @@ describe("GanttChart", () => {
     })
 
     await wrapper.findAll(".gantt-row")[1].trigger("mouseenter", { clientX: 120, clientY: 260 })
+    expect(wrapper.find(".gantt-task-popover").exists()).toBe(false)
+    vi.advanceTimersByTime(220)
+    await nextTick()
     expect(wrapper.find(".gantt-task-popover").exists()).toBe(true)
     expect(wrapper.find(".gantt-task-popover").text()).toContain(tasks[1].name)
     expect(wrapper.find(".gantt-task-popover").text()).toContain("计划")
@@ -211,7 +327,10 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-task-popover").exists()).toBe(false)
 
     await wrapper.find(".gantt-bar.task").trigger("mouseenter", { clientX: 860, clientY: 280 })
+    vi.advanceTimersByTime(220)
+    await nextTick()
     expect(wrapper.find(".gantt-task-popover").exists()).toBe(true)
+    vi.useRealTimers()
   })
 
   it("rolls summary dates and progress up from child tasks", () => {
@@ -295,6 +414,7 @@ describe("GanttChart", () => {
   })
 
   it("emits dependency links from manual link handles", async () => {
+    vi.useFakeTimers()
     const wrapper = mount(GanttChart, {
       props: {
         tasks,
@@ -302,7 +422,11 @@ describe("GanttChart", () => {
       }
     })
 
+    await wrapper.find(".gantt-bar.task").trigger("mouseenter", { clientX: 140, clientY: 120 })
     await wrapper.find(".gantt-link-handle.out").trigger("pointerdown", { clientX: 120, clientY: 120 })
+    vi.advanceTimersByTime(220)
+    await nextTick()
+    expect(wrapper.find(".gantt-task-popover").exists()).toBe(false)
     await wrapper.find(".gantt-timeline").trigger("pointermove", { clientX: 180, clientY: 160 })
     expect(wrapper.find(".gantt-link-draft polyline").exists()).toBe(true)
     expect(wrapper.find(".gantt-link-draft polyline").attributes("points")?.split(" ")).toHaveLength(6)
@@ -310,6 +434,79 @@ describe("GanttChart", () => {
     expect(wrapper.emitted("linkChange")?.[0]?.[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceId: "summary", targetId: "task-1", type: "FS" })
     ]))
+    vi.useRealTimers()
+  })
+
+  it("supports dependency links from both task anchors", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        config: { viewMode: "day" }
+      }
+    })
+    const leftHandles = wrapper.findAll(".gantt-link-handle.in")
+    const rightHandles = wrapper.findAll(".gantt-link-handle.out")
+
+    await leftHandles[0].trigger("pointerdown", { clientX: 120, clientY: 120 })
+    await leftHandles[1].trigger("pointerup")
+    expect(wrapper.emitted("linkChange")?.[0]?.[0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: "summary", targetId: "task-1", type: "SS" })
+    ]))
+
+    await rightHandles[0].trigger("pointerdown", { clientX: 180, clientY: 120 })
+    await rightHandles[1].trigger("pointerup")
+    expect(wrapper.emitted("linkChange")?.[1]?.[0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: "summary", targetId: "task-1", type: "FF" })
+    ]))
+  })
+
+  it("emits impacted successor dates after dragging a linked task", async () => {
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0)
+        return 1
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const linkedTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-06", end: "2026-07-08" },
+        actual: { start: "2026-07-06", end: "2026-07-08", progress: 20 }
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "FS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+
+    const sourceBar = wrapper.findAll(".gantt-bar.task")[0]
+    await sourceBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await sourceBar.trigger("pointerup", { clientX: 160, pointerId: 1 })
+
+    expect(wrapper.emitted("taskChange")).toEqual(expect.arrayContaining([
+      ["source", expect.objectContaining({ actualStart: expect.any(Date), actualEnd: expect.any(Date) })],
+      ["target", expect.objectContaining({ actualStart: expect.any(Date), actualEnd: expect.any(Date) })]
+    ]))
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
   })
 
   it("virtualizes table rows for large task lists", async () => {
