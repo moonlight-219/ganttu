@@ -175,7 +175,7 @@ export interface PatchTask {
 
 export const defaultConfig: GanttConfig = {
   viewMode: "month",
-  rowHeight: 36,
+  rowHeight: 44,
   columnWidth: 30,
   headerHeight: 50,
   taskListWidth: 280,

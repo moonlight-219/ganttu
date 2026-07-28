@@ -60,9 +60,9 @@ const viewOptions: Array<{ mode: ViewMode; label: string }> = [
   { mode: "month", label: "年/月" },
   { mode: "quarter", label: "年/季度" }
 ]
-const PLAN_BAR_TOP = 5
+const PLAN_BAR_TOP = 7
 const PLAN_BAR_HEIGHT = 12
-const ACTUAL_BAR_TOP = 21
+const ACTUAL_BAR_TOP = 26
 const ACTUAL_BAR_HEIGHT = 14
 const collapsedIds = ref(new Set<string>())
 const selectedTaskId = ref<string | null>(null)
@@ -105,14 +105,6 @@ const linkEditDraft = ref({
   lag: 0,
   lagUnit: "calendar" as NonNullable<GanttLink["lagUnit"]>
 })
-const dragPreview = ref<{
-  taskId: string
-  patch: PatchTask
-  mode: "move" | "start" | "end" | "plan-move" | "plan-start" | "plan-end"
-  clientX: number
-  pixelDelta: number
-  deltaDays: number
-} | null>(null)
 const draggingTask = ref(false)
 const linkDraft = ref<{
   sourceId: string
@@ -273,14 +265,12 @@ const layoutResult = computed(() => computeLayout(
 ))
 const layouts = computed<TaskLayout[]>(() => layoutResult.value.ok ? layoutResult.value.data : [])
 const layoutById = computed(() => new Map(layouts.value.map((layout) => [layout.taskId, layout])))
-const linkLayouts = computed(() => layouts.value.map((layout) => previewActualLayout(layout)))
 const visibleRows = computed(() => flatTasks.value.slice(visibleWindow.value.start, visibleWindow.value.end + 1))
 const selectedLink = computed(() => selectedLinkId.value ? normalizedLinks.value.find((link) => link.id === selectedLinkId.value) ?? null : null)
 const linkOverlayItems = computed(() => {
-  const byId = new Map(linkLayouts.value.map((layout) => [layout.taskId, layout]))
   return normalizedLinks.value.flatMap((link) => {
-    const source = byId.get(link.sourceId)
-    const target = byId.get(link.targetId)
+    const source = layoutById.value.get(link.sourceId)
+    const target = layoutById.value.get(link.targetId)
     if (!source || !target) {
       return []
     }
@@ -391,6 +381,14 @@ function moveTaskDetails(event: PointerEvent | MouseEvent) {
     ...hoveredTask.value,
     x: event.clientX - rect.left,
     y: event.clientY - rect.top
+  }
+}
+
+function handleTimelinePointerMove(event: PointerEvent) {
+  updateLinkDraft(event)
+  const target = event.target as Element | null
+  if (!target?.closest(".gantt-bar, .gantt-plan-bar")) {
+    hideTaskDetails()
   }
 }
 
@@ -673,27 +671,6 @@ function deleteSelectedTask() {
   editorOpen.value = false
 }
 
-function applyPreviewPatch(task: GanttTask, patch: PatchTask): GanttTask {
-  const actual = { ...task.actual }
-  const plan = { ...task.plan }
-  if (patch.actualStart) actual.start = patch.actualStart
-  if (patch.actualEnd) actual.end = patch.actualEnd
-  if (patch.planStart) plan.start = patch.planStart
-  if (patch.planEnd) plan.end = patch.planEnd
-
-  if (task.type === "milestone") {
-    actual.end = actual.start
-    plan.end = plan.start
-  }
-
-  return { ...task, actual, plan }
-}
-
-function previewTaskForStyle(task: GanttTask): GanttTask {
-  const preview = dragPreview.value
-  return preview?.taskId === task.id ? applyPreviewPatch(task, preview.patch) : task
-}
-
 function rollupSummaryTasks(tasks: GanttTask[]): GanttTask[] {
   const byId = new Map(tasks.map((task) => [task.id, {
     ...task,
@@ -877,46 +854,28 @@ function drawCanvas() {
 }
 
 function taskStyle(layout: TaskLayout, task: GanttTask) {
-  const previewedTask = previewTaskForStyle(task)
   const rowTop = layout.top - mergedConfig.value.headerHeight
-  const top = previewedTask.type === "milestone"
+  const top = task.type === "milestone"
     ? 0
-    : rowTop + (previewedTask.type === "summary" ? ACTUAL_BAR_TOP + 1 : ACTUAL_BAR_TOP)
-  const height = previewedTask.type === "milestone"
+    : rowTop + (task.type === "summary" ? ACTUAL_BAR_TOP + 1 : ACTUAL_BAR_TOP)
+  const height = task.type === "milestone"
     ? Math.max(1, totalHeight.value - mergedConfig.value.headerHeight)
-    : previewedTask.type === "summary" ? 8 : ACTUAL_BAR_HEIGHT
-  const preview = dragPreview.value?.taskId === task.id && isActualDragMode(dragPreview.value.mode)
-    ? dragPreview.value
-    : null
-  const metrics = preview
-    ? previewBarMetrics(layout, preview.mode, preview.pixelDelta)
-    : { left: layout.left, width: layout.width }
+    : task.type === "summary" ? 8 : ACTUAL_BAR_HEIGHT
   return {
-    transform: `translate(${metrics.left}px, ${top}px)`,
-    width: previewedTask.type === "milestone" ? "0px" : `${metrics.width}px`,
+    transform: `translate(${layout.left}px, ${top}px)`,
+    width: task.type === "milestone" ? "0px" : `${layout.width}px`,
     height: `${height}px`,
-    "--bar-color": actualTaskColor(previewedTask),
+    "--bar-color": actualTaskColor(task),
     "--overdue-color": "#dc2626"
   }
 }
 
 function planBarStyle(layout: TaskLayout, task: GanttTask) {
-  const previewedTask = previewTaskForStyle(task)
-  const preview = dragPreview.value?.taskId === task.id && isPlanDragMode(dragPreview.value.mode)
-    ? dragPreview.value
-    : null
-  const start = toDate(previewedTask.plan.start)
-  const end = toDate(previewedTask.plan.end)
+  const start = toDate(task.plan.start)
+  const end = toDate(task.plan.end)
   const dayWidth = mergedConfig.value.columnWidth
-  const baseStart = toDate(task.plan.start)
-  const baseEnd = toDate(task.plan.end)
-  const baseLeft = Math.round((baseStart.getTime() - timelineStart.value.getTime()) / 86400000) * dayWidth
-  const baseWidth = Math.max(1, Math.round((baseEnd.getTime() - baseStart.getTime()) / 86400000) + 1) * dayWidth
-  const previewMetrics = preview
-    ? previewBarMetrics({ left: baseLeft, width: baseWidth }, preview.mode, preview.pixelDelta)
-    : null
-  const left = previewMetrics?.left ?? Math.round((start.getTime() - timelineStart.value.getTime()) / 86400000) * dayWidth
-  const width = previewMetrics?.width ?? Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
+  const left = Math.round((start.getTime() - timelineStart.value.getTime()) / 86400000) * dayWidth
+  const width = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
   const rowTop = layout.top - mergedConfig.value.headerHeight
 
   return {
@@ -929,14 +888,13 @@ function planBarStyle(layout: TaskLayout, task: GanttTask) {
 }
 
 function overdueSegmentStyle(task: GanttTask) {
-  const previewedTask = previewTaskForStyle(task)
-  if (!isOverdue(previewedTask)) {
+  if (!isOverdue(task)) {
     return { display: "none" }
   }
 
-  const actualStart = toDate(previewedTask.actual.start)
-  const actualEnd = toDate(previewedTask.actual.end)
-  const overdueStart = new Date(Math.max(actualStart.getTime(), addDays(previewedTask.plan.end, 1).getTime()))
+  const actualStart = toDate(task.actual.start)
+  const actualEnd = toDate(task.actual.end)
+  const overdueStart = new Date(Math.max(actualStart.getTime(), addDays(task.plan.end, 1).getTime()))
   const totalDays = taskDurationDays(actualStart, actualEnd)
   const offsetDays = Math.max(0, Math.round((overdueStart.getTime() - actualStart.getTime()) / 86400000))
   const left = Math.min(100, offsetDays / totalDays * 100)
@@ -947,7 +905,9 @@ function overdueSegmentStyle(task: GanttTask) {
   }
 }
 
-function previewBarMetrics(layout: Pick<TaskLayout, "left" | "width">, mode: NonNullable<typeof dragPreview.value>["mode"], pixelDelta: number) {
+type DragPreviewMode = "move" | "start" | "end" | "plan-move" | "plan-start" | "plan-end"
+
+function previewBarMetrics(layout: Pick<TaskLayout, "left" | "width">, mode: DragPreviewMode, pixelDelta: number) {
   const dayWidth = mergedConfig.value.columnWidth
   const normalizedMode = mode.startsWith("plan-")
     ? mode.replace("plan-", "")
@@ -985,24 +945,70 @@ function actualPreviewPixelDelta(
   return Math.round((toDate(patch.actualStart ?? originalStart).getTime() - originalStart.getTime()) / 86400000) * columnWidth
 }
 
-function previewActualLayout(layout: TaskLayout): TaskLayout {
-  const preview = dragPreview.value
-  if (!preview || preview.taskId !== layout.taskId || !isActualDragMode(preview.mode)) {
-    return layout
-  }
+function applyBarPreviewStyle(element: HTMLElement, layout: Pick<TaskLayout, "left" | "width">, mode: DragPreviewMode, pixelDelta: number) {
+  const metrics = previewBarMetrics(layout, mode, pixelDelta)
+  const [, top = "0"] = element.style.transform.match(/translate\([^,]+,\s*([^)]+)\)/) ?? []
+  element.style.transform = `translate(${metrics.left}px, ${top})`
+  element.style.width = `${metrics.width}px`
+}
 
+function planPreviewLayout(task: GanttTask): Pick<TaskLayout, "left" | "width"> {
+  const dayWidth = mergedConfig.value.columnWidth
+  const start = toDate(task.plan.start)
+  const end = toDate(task.plan.end)
   return {
-    ...layout,
-    ...previewBarMetrics(layout, preview.mode, preview.pixelDelta)
+    left: Math.round((start.getTime() - timelineStart.value.getTime()) / 86400000) * dayWidth,
+    width: Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
   }
 }
 
-function isActualDragMode(mode: NonNullable<typeof dragPreview.value>["mode"]): mode is "move" | "start" | "end" {
-  return mode === "move" || mode === "start" || mode === "end"
+function linkPointsFor(link: GanttLink, activeTaskId?: string, activeMetrics?: Pick<TaskLayout, "left" | "width">): string {
+  const sourceLayout = layoutById.value.get(link.sourceId)
+  const targetLayout = layoutById.value.get(link.targetId)
+  if (!sourceLayout || !targetLayout) {
+    return ""
+  }
+
+  const source = activeTaskId === link.sourceId && activeMetrics
+    ? { ...sourceLayout, ...activeMetrics }
+    : sourceLayout
+  const target = activeTaskId === link.targetId && activeMetrics
+    ? { ...targetLayout, ...activeMetrics }
+    : targetLayout
+  const sourceAnchor = link.type === "SS" || link.type === "SF" ? "start" : "finish"
+  const targetAnchor = link.type === "SS" || link.type === "FS" ? "start" : "finish"
+  const start = taskAnchorPoint(source, sourceAnchor, mergedConfig.value.headerHeight, ACTUAL_BAR_TOP, ACTUAL_BAR_HEIGHT)
+  const end = taskAnchorPoint(target, targetAnchor, mergedConfig.value.headerHeight, ACTUAL_BAR_TOP, ACTUAL_BAR_HEIGHT)
+  return buildOrthogonalLinkPath(start, end, sourceAnchor, targetAnchor).map((point) => `${point.x},${point.y}`).join(" ")
 }
 
-function isPlanDragMode(mode: NonNullable<typeof dragPreview.value>["mode"]): mode is "plan-move" | "plan-start" | "plan-end" {
-  return mode === "plan-move" || mode === "plan-start" || mode === "plan-end"
+function collectLinkElementsById(): Map<string, SVGPolylineElement[]> {
+  const elementsByLinkId = new Map<string, SVGPolylineElement[]>()
+  timelineRef.value?.querySelector(".gantt-link-layer")?.querySelectorAll<SVGPolylineElement>("[data-link-id]").forEach((element) => {
+    const linkId = element.dataset.linkId
+    if (!linkId) {
+      return
+    }
+    elementsByLinkId.set(linkId, [...(elementsByLinkId.get(linkId) ?? []), element])
+  })
+  return elementsByLinkId
+}
+
+function updateConnectedLinkElements(
+  taskId: string,
+  metrics: Pick<TaskLayout, "left" | "width">,
+  connectedLinks = normalizedLinks.value.filter((link) => link.sourceId === taskId || link.targetId === taskId),
+  elementsByLinkId = collectLinkElementsById()
+) {
+  for (const link of connectedLinks) {
+    const points = linkPointsFor(link, taskId, metrics)
+    if (!points) {
+      continue
+    }
+    for (const element of elementsByLinkId.get(link.id) ?? []) {
+      element.setAttribute("points", points)
+    }
+  }
 }
 
 function markerGroupStyle(date: string, color?: string) {
@@ -1060,6 +1066,9 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   if (mergedConfig.value.editable === false) {
     return
   }
+  if (task.type === "summary") {
+    return
+  }
   if (linkDraft.value) {
     return
   }
@@ -1072,44 +1081,45 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   const originalStart = toDate(task.actual.start)
   const originalEnd = toDate(task.actual.end)
   const target = event.currentTarget as HTMLElement
+  const previewElement = target.closest(".gantt-bar") as HTMLElement | null
+  const baseLayout = layoutById.value.get(task.id)
+  if (!previewElement || !baseLayout) {
+    return
+  }
   target.setPointerCapture?.(event.pointerId)
   selectedTaskId.value = task.id
   draggingTask.value = true
+  previewElement.classList.add("dragging")
   hideTaskDetails()
   let lastDeltaDays = 0
-  let lastPixelDelta = 0
   let previewFrame = 0
   let pendingDeltaDays = 0
-  let pendingClientX = startX
-  let pendingPixelDelta = 0
+  const incomingLinks = normalizedLinks.value.filter((link) => link.targetId === task.id)
+  const connectedLinks = normalizedLinks.value.filter((link) => link.sourceId === task.id || link.targetId === task.id)
+  const linkElementsById = collectLinkElementsById()
+  const dependencyTaskById = taskById.value
 
   const flushPreview = () => {
     previewFrame = 0
-    const patch = clampPatchByDependencies(task, buildDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays))
+    const patch = clampPatchByDependencies(
+      task,
+      buildDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays),
+      incomingLinks,
+      dependencyTaskById
+    )
     const previewPixelDelta = actualPreviewPixelDelta(mode, originalStart, originalEnd, patch, columnWidth)
-    dragPreview.value = pendingDeltaDays === 0 && pendingPixelDelta === 0
-      ? null
-      : {
-        taskId: task.id,
-        patch,
-        mode,
-        clientX: pendingClientX,
-        pixelDelta: previewPixelDelta,
-        deltaDays: pendingDeltaDays
-      }
+    const metrics = previewBarMetrics(baseLayout, mode, previewPixelDelta)
+    applyBarPreviewStyle(previewElement, baseLayout, mode, previewPixelDelta)
+    updateConnectedLinkElements(task.id, metrics, connectedLinks, linkElementsById)
   }
 
   const onMove = (moveEvent: PointerEvent) => {
-    const pixelDelta = moveEvent.clientX - startX
-    const deltaDays = Math.round(pixelDelta / columnWidth)
-    if (deltaDays === lastDeltaDays && pixelDelta === lastPixelDelta) {
+    const deltaDays = Math.round((moveEvent.clientX - startX) / columnWidth)
+    if (deltaDays === lastDeltaDays) {
       return
     }
     lastDeltaDays = deltaDays
-    lastPixelDelta = pixelDelta
     pendingDeltaDays = deltaDays
-    pendingClientX = moveEvent.clientX
-    pendingPixelDelta = pixelDelta
     if (!previewFrame) {
       previewFrame = window.requestAnimationFrame(flushPreview)
     }
@@ -1124,14 +1134,19 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
     target.releasePointerCapture?.(event.pointerId)
     target.removeEventListener("pointermove", onMove)
     target.removeEventListener("pointerup", onUp)
-    dragPreview.value = null
+    previewElement.classList.remove("dragging")
     draggingTask.value = false
 
     if (deltaDays === 0) {
       return
     }
 
-    const patch = clampPatchByDependencies(task, buildDragPatch(task, mode, originalStart, originalEnd, deltaDays))
+    const patch = clampPatchByDependencies(
+      task,
+      buildDragPatch(task, mode, originalStart, originalEnd, deltaDays),
+      incomingLinks,
+      dependencyTaskById
+    )
 
     const impact = computeImpact(task.id, patch, dependencyTasks.value, normalizedLinks.value, mergedConfig.value)
     if (!impact.ok) {
@@ -1139,16 +1154,15 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
       return
     }
 
-    const emittedIds = new Set<string>()
+    emit("taskChange", task.id, patch)
     for (const changed of impact.data.changed) {
-      emittedIds.add(changed.taskId)
+      if (changed.taskId === task.id) {
+        continue
+      }
       emit("taskChange", changed.taskId, {
         actualStart: changed.actualStart,
         actualEnd: changed.actualEnd
       })
-    }
-    if (!emittedIds.has(task.id)) {
-      emit("taskChange", task.id, patch)
     }
   }
 
@@ -1158,6 +1172,9 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
 
 function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" | "end") {
   if (mergedConfig.value.editable === false || mergedConfig.value.editablePlan !== true) {
+    return
+  }
+  if (task.type === "summary") {
     return
   }
   if (linkDraft.value) {
@@ -1172,42 +1189,34 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   const originalStart = toDate(task.plan.start)
   const originalEnd = toDate(task.plan.end)
   const target = event.currentTarget as HTMLElement
+  const previewElement = target.closest(".gantt-plan-bar") as HTMLElement | null
+  const rowLayout = layoutById.value.get(task.id)
+  const baseLayout = planPreviewLayout(task)
+  if (!previewElement || !rowLayout) {
+    return
+  }
   target.setPointerCapture?.(event.pointerId)
   selectedTaskId.value = task.id
   draggingTask.value = true
+  previewElement.classList.add("dragging")
   hideTaskDetails()
   let lastDeltaDays = 0
-  let lastPixelDelta = 0
   let previewFrame = 0
   let pendingDeltaDays = 0
-  let pendingClientX = startX
-  let pendingPixelDelta = 0
 
   const flushPreview = () => {
     previewFrame = 0
-    dragPreview.value = pendingDeltaDays === 0 && pendingPixelDelta === 0
-      ? null
-      : {
-        taskId: task.id,
-        patch: buildPlanDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays),
-        mode: mode === "move" ? "plan-move" : mode === "start" ? "plan-start" : "plan-end",
-        clientX: pendingClientX,
-        pixelDelta: pendingPixelDelta,
-        deltaDays: pendingDeltaDays
-      }
+    const previewMode: DragPreviewMode = mode === "move" ? "plan-move" : mode === "start" ? "plan-start" : "plan-end"
+    applyBarPreviewStyle(previewElement, baseLayout, previewMode, pendingDeltaDays * columnWidth)
   }
 
   const onMove = (moveEvent: PointerEvent) => {
-    const pixelDelta = moveEvent.clientX - startX
-    const deltaDays = Math.round(pixelDelta / columnWidth)
-    if (deltaDays === lastDeltaDays && pixelDelta === lastPixelDelta) {
+    const deltaDays = Math.round((moveEvent.clientX - startX) / columnWidth)
+    if (deltaDays === lastDeltaDays) {
       return
     }
     lastDeltaDays = deltaDays
-    lastPixelDelta = pixelDelta
     pendingDeltaDays = deltaDays
-    pendingClientX = moveEvent.clientX
-    pendingPixelDelta = pixelDelta
     if (!previewFrame) {
       previewFrame = window.requestAnimationFrame(flushPreview)
     }
@@ -1222,7 +1231,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     target.releasePointerCapture?.(event.pointerId)
     target.removeEventListener("pointermove", onMove)
     target.removeEventListener("pointerup", onUp)
-    dragPreview.value = null
+    previewElement.classList.remove("dragging")
     draggingTask.value = false
 
     if (deltaDays === 0) {
@@ -1237,7 +1246,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
 }
 
 function beginLink(event: PointerEvent, task: GanttTask, sourceAnchor: LinkAnchor) {
-  if (mergedConfig.value.editable === false || mergedConfig.value.enableLinkCreation === false || task.type === "milestone") {
+  if (mergedConfig.value.editable === false || mergedConfig.value.enableLinkCreation === false || task.type === "milestone" || task.type === "summary") {
     return
   }
   const timeline = timelineRef.value?.getBoundingClientRect()
@@ -1267,7 +1276,7 @@ function beginLink(event: PointerEvent, task: GanttTask, sourceAnchor: LinkAncho
 
 function finishLink(task: GanttTask, targetAnchor: LinkAnchor = "start") {
   const draft = linkDraft.value
-  if (!draft || draft.sourceId === task.id || task.type === "milestone") {
+  if (!draft || draft.sourceId === task.id || task.type === "milestone" || task.type === "summary") {
     clearLinkDraft()
     return
   }
@@ -1305,13 +1314,16 @@ function dependencyLockedDate(source: GanttTask, link: GanttLink): Date {
   return addDays(source.actual.start, lag)
 }
 
-function clampPatchByDependencies(task: GanttTask, patch: PatchTask): PatchTask {
-  const incoming = normalizedLinks.value.filter((link) => link.targetId === task.id)
+function clampPatchByDependencies(
+  task: GanttTask,
+  patch: PatchTask,
+  incoming = normalizedLinks.value.filter((link) => link.targetId === task.id),
+  byId = taskById.value
+): PatchTask {
   if (!incoming.length) {
     return patch
   }
 
-  const byId = taskById.value
   let start = toDate(patch.actualStart ?? task.actual.start)
   let end = toDate(patch.actualEnd ?? task.actual.end)
   const span = Math.max(0, Math.round((toDate(task.actual.end).getTime() - toDate(task.actual.start).getTime()) / 86400000))
@@ -1367,7 +1379,7 @@ function buildDragPatch(
 
   if (mode === "start") {
     const nextStart = addDays(originalStart, deltaDays)
-    return { actualStart: nextStart, actualEnd: task.type === "milestone" ? nextStart : undefined }
+    return { actualStart: nextStart, actualEnd: task.type === "milestone" ? nextStart : originalEnd }
   }
 
   return { actualEnd: addDays(originalEnd, deltaDays) }
@@ -1388,7 +1400,7 @@ function buildPlanDragPatch(
 
   if (mode === "start") {
     const nextStart = addDays(originalStart, deltaDays)
-    return { planStart: nextStart, planEnd: task.type === "milestone" ? nextStart : undefined }
+    return { planStart: nextStart, planEnd: task.type === "milestone" ? nextStart : originalEnd }
   }
 
   return { planEnd: addDays(originalEnd, deltaDays) }
@@ -1555,7 +1567,7 @@ function clampProgress(value: number) {
         ref="timelineRef"
         class="gantt-timeline"
         @scroll="syncScroll"
-        @pointermove="updateLinkDraft"
+        @pointermove="handleTimelinePointerMove"
         @pointerup="clearLinkDraft"
       >
         <div class="gantt-timeline-inner" :style="timelineInnerStyle">
@@ -1637,6 +1649,7 @@ function clampProgress(value: number) {
               class="gantt-link-path"
               :class="{ selected: item.link.id === selectedLinkId }"
               :points="item.points"
+              :data-link-id="item.link.id"
             ></polyline>
             <polyline
               v-for="item in linkOverlayItems"
@@ -1644,6 +1657,7 @@ function clampProgress(value: number) {
               class="gantt-link-hit"
               :class="{ selected: item.link.id === selectedLinkId }"
               :points="item.points"
+              :data-link-id="item.link.id"
               tabindex="0"
               role="button"
               :aria-label="`编辑依赖 ${item.link.type}`"
@@ -1662,8 +1676,8 @@ function clampProgress(value: number) {
               :class="[
                 taskById.get(layout.taskId)?.type,
                 {
-                  editable: mergedConfig.editablePlan === true,
-                  locked: mergedConfig.editablePlan !== true
+                  editable: mergedConfig.editablePlan === true && taskById.get(layout.taskId)?.type !== 'summary',
+                  locked: mergedConfig.editablePlan !== true || taskById.get(layout.taskId)?.type === 'summary'
                 }
               ]"
               :style="planBarStyle(layout, taskById.get(layout.taskId)!)"
@@ -1673,8 +1687,8 @@ function clampProgress(value: number) {
               @click.stop="selectedTaskId = layout.taskId"
             >
               <span class="gantt-plan-progress" :style="{ width: `${taskById.get(layout.taskId)?.actual.progress ?? 0}%` }"></span>
-              <button class="gantt-plan-resize start" type="button" aria-label="调整计划开始时间" @pointerdown.stop="beginPlanDrag($event, taskById.get(layout.taskId)!, 'start')" />
-              <button class="gantt-plan-resize end" type="button" aria-label="调整计划结束时间" @pointerdown.stop="beginPlanDrag($event, taskById.get(layout.taskId)!, 'end')" />
+              <button v-if="taskById.get(layout.taskId)?.type !== 'summary'" class="gantt-plan-resize start" type="button" aria-label="调整计划开始时间" @pointerdown.stop="beginPlanDrag($event, taskById.get(layout.taskId)!, 'start')" />
+              <button v-if="taskById.get(layout.taskId)?.type !== 'summary'" class="gantt-plan-resize end" type="button" aria-label="调整计划结束时间" @pointerdown.stop="beginPlanDrag($event, taskById.get(layout.taskId)!, 'end')" />
             </div>
             <div
               v-for="layout in layouts"
@@ -1684,7 +1698,6 @@ function clampProgress(value: number) {
                 taskById.get(layout.taskId)?.type,
                 {
                   selected: layout.taskId === selectedTaskId,
-                  dragging: dragPreview?.taskId === layout.taskId,
                   overdue: isOverdue(taskById.get(layout.taskId)!)
                 }
               ]"
@@ -1707,10 +1720,10 @@ function clampProgress(value: number) {
                 </span>
               </template>
               <template v-else>
-                <button class="gantt-resize start" type="button" aria-label="调整开始时间" @pointerdown.stop="beginDrag($event, taskById.get(layout.taskId)!, 'start')" />
+                <button v-if="taskById.get(layout.taskId)?.type !== 'summary'" class="gantt-resize start" type="button" aria-label="调整开始时间" @pointerdown.stop="beginDrag($event, taskById.get(layout.taskId)!, 'start')" />
                 <span class="gantt-overdue-segment" :style="overdueSegmentStyle(taskById.get(layout.taskId)!)"></span>
                 <button
-                  v-if="mergedConfig.enableLinkCreation !== false"
+                  v-if="mergedConfig.enableLinkCreation !== false && taskById.get(layout.taskId)?.type !== 'summary'"
                   class="gantt-link-handle out"
                   type="button"
                   aria-label="创建任务依赖"
@@ -1718,14 +1731,14 @@ function clampProgress(value: number) {
                   @pointerup.stop="finishLink(taskById.get(layout.taskId)!, 'finish')"
                 ></button>
                 <button
-                  v-if="mergedConfig.enableLinkCreation !== false"
+                  v-if="mergedConfig.enableLinkCreation !== false && taskById.get(layout.taskId)?.type !== 'summary'"
                   class="gantt-link-handle in"
                   type="button"
                   aria-label="连接到此任务"
                   @pointerdown.stop="beginLink($event, taskById.get(layout.taskId)!, 'start')"
                   @pointerup.stop="finishLink(taskById.get(layout.taskId)!, 'start')"
                 ></button>
-                <button class="gantt-resize end" type="button" aria-label="调整结束时间" @pointerdown.stop="beginDrag($event, taskById.get(layout.taskId)!, 'end')" />
+                <button v-if="taskById.get(layout.taskId)?.type !== 'summary'" class="gantt-resize end" type="button" aria-label="调整结束时间" @pointerdown.stop="beginDrag($event, taskById.get(layout.taskId)!, 'end')" />
               </template>
             </div>
           </div>

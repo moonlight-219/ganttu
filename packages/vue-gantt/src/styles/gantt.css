@@ -815,6 +815,7 @@ body.gantt-resizing {
   height: 10px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--bar-color), black 8%);
+  cursor: default;
 }
 
 .gantt-plan-resize {
@@ -864,6 +865,7 @@ body.gantt-resizing {
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--bar-color), black 8%);
   border-radius: 999px;
+  cursor: default;
 }
 
 .gantt-bar.milestone {
@@ -947,11 +949,11 @@ body.gantt-resizing {
 }
 
 .gantt-link-handle.in {
-  left: -18px;
+  left: -10px;
 }
 
 .gantt-link-handle.out {
-  right: -18px;
+  right: -10px;
 }
 
 .gantt-bar:hover .gantt-link-handle,
