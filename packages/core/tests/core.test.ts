@@ -50,11 +50,27 @@ const tasks: GanttTask[] = [
 describe("@gantt/core", () => {
   it("normalizes embedded dependencies and removes duplicates", () => {
     const links = normalizeLinks(tasks, [
-      { id: "manual-duplicate", sourceId: "1", targetId: "2", type: "FS", lag: 0, lagUnit: "calendar" }
+      { id: "manual-duplicate", sourceId: "1", targetId: "2", type: "SS", lag: 2, lagUnit: "working" }
     ])
 
     expect(links).toHaveLength(2)
-    expect(links[0]).toMatchObject({ sourceId: "1", targetId: "2", type: "FS" })
+    expect(links[0]).toMatchObject({
+      sourceId: "1",
+      targetId: "2",
+      type: "FS",
+      lag: 0,
+      lagUnit: "calendar"
+    })
+  })
+
+  it("keeps existing dependencies when a later link would create a cycle", () => {
+    const links = normalizeLinks(tasks.map((task) => ({ ...task, dependencies: [] })), [
+      { id: "a", sourceId: "1", targetId: "2", type: "FS" },
+      { id: "b", sourceId: "2", targetId: "3", type: "FS" },
+      { id: "cycle", sourceId: "3", targetId: "1", type: "FS" }
+    ])
+
+    expect(links.map((link) => link.id)).toEqual(["a", "b"])
   })
 
   it("detects cycles", () => {

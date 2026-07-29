@@ -26,6 +26,7 @@ import { drawGrid } from "../rendering/canvas/grid"
 import { buildOrthogonalLinkPath, taskAnchorPoint, type LinkAnchor } from "../rendering/canvas/links"
 import { setupCanvas } from "../rendering/canvas/viewport"
 import type {
+  GanttLinkRejection,
   GanttMarkerEditRequest,
   GanttMarkerEditorDraft,
   GanttTaskEditRequest,
@@ -48,6 +49,7 @@ const props = withDefaults(defineProps<{
   onMarkerDelete?: (id: string) => void
   onMarkerEditRequest?: (request: GanttMarkerEditRequest) => void
   onLinkChange?: (links: GanttLink[]) => void
+  onLinkRejected?: (rejection: GanttLinkRejection) => void
   onViewModeChange?: (mode: ViewMode) => void
 }>(), {
   links: () => [],
@@ -64,6 +66,7 @@ const emit = defineEmits<{
   markerDelete: [id: string]
   markerEditRequest: [request: GanttMarkerEditRequest]
   linkChange: [links: GanttLink[]]
+  linkRejected: [rejection: GanttLinkRejection]
   viewModeChange: [mode: ViewMode]
 }>()
 
@@ -152,6 +155,8 @@ const markerDraft = ref<GanttMarkerEditorDraft>({
 })
 const selectedLinkId = ref<string | null>(null)
 const linkEditorOpen = ref(false)
+const linkNotice = ref<GanttLinkRejection | null>(null)
+let linkNoticeTimer = 0
 const linkEditDraft = ref({
   id: "",
   type: "FS" as GanttLink["type"],
@@ -570,6 +575,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopSplitterResize?.()
   clearTaskDetailsTimer()
+  if (linkNoticeTimer) {
+    window.clearTimeout(linkNoticeTimer)
+  }
   if (linkDraftFrame) {
     window.cancelAnimationFrame(linkDraftFrame)
   }
@@ -1174,6 +1182,24 @@ function clearLinkDraft() {
   linkDraft.value = null
 }
 
+function rejectLink(reason: GanttLinkRejection["reason"], sourceId: string, targetId: string) {
+  const message = reason === "duplicate"
+    ? "这两个任务之间已存在依赖关系"
+    : reason === "cycle"
+      ? "无法创建会形成循环的依赖关系"
+      : "任务不能与自身建立依赖关系"
+  const rejection: GanttLinkRejection = { reason, sourceId, targetId, message }
+  linkNotice.value = rejection
+  emit("linkRejected", rejection)
+  if (linkNoticeTimer) {
+    window.clearTimeout(linkNoticeTimer)
+  }
+  linkNoticeTimer = window.setTimeout(() => {
+    linkNotice.value = null
+    linkNoticeTimer = 0
+  }, 2600)
+}
+
 function clampTaskListWidth(width: number): number {
   const chartWidth = chartRef.value?.clientWidth || width + 320
   return Math.round(Math.min(Math.max(280, width), Math.max(280, chartWidth - 320)))
@@ -1643,7 +1669,22 @@ function beginLink(event: PointerEvent, task: GanttTask, sourceAnchor: LinkAncho
 
 function finishLink(task: GanttTask, targetAnchor: LinkAnchor = "start") {
   const draft = linkDraft.value
-  if (!draft || draft.sourceId === task.id || task.type === "milestone" || task.type === "summary") {
+  if (!draft) {
+    return
+  }
+  if (draft.sourceId === task.id) {
+    rejectLink("self", draft.sourceId, task.id)
+    clearLinkDraft()
+    return
+  }
+  if (task.type === "milestone" || task.type === "summary") {
+    clearLinkDraft()
+    return
+  }
+  if (normalizedLinks.value.some((link) =>
+    link.sourceId === draft.sourceId && link.targetId === task.id
+  )) {
+    rejectLink("duplicate", draft.sourceId, task.id)
     clearLinkDraft()
     return
   }
@@ -1656,7 +1697,12 @@ function finishLink(task: GanttTask, targetAnchor: LinkAnchor = "start") {
     lag: 0,
     lagUnit: "calendar"
   }
-  emit("linkChange", normalizeLinks(dependencyTasks.value, [...normalizedLinks.value, nextLink]))
+  const nextLinks = normalizeLinks(dependencyTasks.value, [...normalizedLinks.value, nextLink])
+  if (nextLinks.some((link) => link.id === nextLink.id)) {
+    emit("linkChange", nextLinks)
+  } else {
+    rejectLink("cycle", draft.sourceId, task.id)
+  }
   clearLinkDraft()
 }
 
@@ -1884,6 +1930,14 @@ function clampProgress(value: number) {
 
 <template>
   <section ref="chartRef" class="gantt-chart" :style="{ width: chartWidth, height: chartHeight }">
+    <div
+      v-if="linkNotice && mergedConfig.showLinkRejectionNotice !== false"
+      class="gantt-link-notice"
+      role="alert"
+    >
+      <span>!</span>
+      {{ linkNotice.message }}
+    </div>
     <div class="gantt-toolbar">
       <div class="gantt-title">
         <strong>项目甘特图</strong>

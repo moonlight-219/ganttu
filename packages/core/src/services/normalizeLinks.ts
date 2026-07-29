@@ -1,12 +1,33 @@
 import type { GanttLink, GanttTask } from "../types"
-import { checkCyclicDependency } from "./checkCyclicDependency"
 
 export function normalizeLinks(tasks: GanttTask[], standaloneLinks: GanttLink[] = []): GanttLink[] {
   const taskIds = new Set(tasks.map((task) => task.id))
-  const byKey = new Map<string, GanttLink>()
+  const byTaskPair = new Map<string, GanttLink>()
+  const outgoing = new Map<string, Set<string>>()
+
+  const createsCycle = (sourceId: string, targetId: string): boolean => {
+    const pending = [targetId]
+    const visited = new Set<string>()
+    while (pending.length > 0) {
+      const current = pending.pop()!
+      if (current === sourceId) {
+        return true
+      }
+      if (visited.has(current)) {
+        continue
+      }
+      visited.add(current)
+      pending.push(...(outgoing.get(current) ?? []))
+    }
+    return false
+  }
 
   const append = (link: GanttLink) => {
-    if (!taskIds.has(link.sourceId) || !taskIds.has(link.targetId)) {
+    if (
+      !taskIds.has(link.sourceId)
+      || !taskIds.has(link.targetId)
+      || link.sourceId === link.targetId
+    ) {
       return
     }
 
@@ -16,8 +37,15 @@ export function normalizeLinks(tasks: GanttTask[], standaloneLinks: GanttLink[] 
       lag: link.lag ?? 0,
       lagUnit: link.lagUnit ?? "calendar"
     }
-    const key = `${normalized.sourceId}|${normalized.targetId}|${normalized.type}|${normalized.lag}|${normalized.lagUnit}`
-    byKey.set(key, normalized)
+    const pairKey = `${normalized.sourceId}|${normalized.targetId}`
+    if (byTaskPair.has(pairKey) || createsCycle(normalized.sourceId, normalized.targetId)) {
+      return
+    }
+
+    byTaskPair.set(pairKey, normalized)
+    const targets = outgoing.get(normalized.sourceId) ?? new Set<string>()
+    targets.add(normalized.targetId)
+    outgoing.set(normalized.sourceId, targets)
   }
 
   for (const task of tasks) {
@@ -37,7 +65,5 @@ export function normalizeLinks(tasks: GanttTask[], standaloneLinks: GanttLink[] 
     append(link)
   }
 
-  const links = [...byKey.values()]
-  const cycle = checkCyclicDependency(links)
-  return cycle.hasCycle ? [] : links
+  return [...byTaskPair.values()]
 }

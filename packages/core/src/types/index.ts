@@ -115,6 +115,7 @@ export interface GanttConfig {
   editablePlan?: boolean
   editableActual?: boolean
   enableLinkCreation?: boolean
+  showLinkRejectionNotice?: boolean
   virtualScroll?: boolean
   taskColors?: {
     task?: string
@@ -224,6 +225,7 @@ export const defaultConfig: GanttConfig = {
   editablePlan: false,
   editableActual: true,
   enableLinkCreation: true,
+  showLinkRejectionNotice: true,
   virtualScroll: true,
   taskColors: {
     task: "#2563eb",

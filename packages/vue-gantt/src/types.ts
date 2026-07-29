@@ -43,3 +43,10 @@ export interface GanttMarkerEditRequest {
   marker?: GanttMarker
   draft: GanttMarkerEditorDraft
 }
+
+export interface GanttLinkRejection {
+  reason: "duplicate" | "cycle" | "self"
+  sourceId: string
+  targetId: string
+  message: string
+}

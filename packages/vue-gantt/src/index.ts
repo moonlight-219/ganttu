@@ -14,6 +14,7 @@ export type {
   ViewMode
 } from "@gantt/core"
 export type {
+  GanttLinkRejection,
   GanttMarkerEditRequest,
   GanttMarkerEditorDraft,
   GanttTaskEditRequest,

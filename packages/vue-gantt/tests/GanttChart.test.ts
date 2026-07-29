@@ -1001,6 +1001,36 @@ describe("GanttChart", () => {
     ]))
   })
 
+  it("rejects duplicate task-pair links and reverse links that create a cycle", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkableTasks,
+        links: [{
+          id: "existing",
+          sourceId: "source",
+          targetId: "target",
+          type: "FS"
+        }],
+        config: { viewMode: "day" }
+      }
+    })
+    const leftHandles = wrapper.findAll(".gantt-link-handle.in")
+    const rightHandles = wrapper.findAll(".gantt-link-handle.out")
+
+    await leftHandles[0].trigger("pointerdown", { clientX: 120, clientY: 120 })
+    await rightHandles[1].trigger("pointerup")
+    await rightHandles[1].trigger("pointerdown", { clientX: 180, clientY: 160 })
+    await leftHandles[0].trigger("pointerup")
+
+    expect(wrapper.emitted("linkChange")).toBeUndefined()
+    expect(wrapper.emitted("linkRejected")?.map((event) => event[0])).toMatchObject([
+      { reason: "duplicate", sourceId: "source", targetId: "target" },
+      { reason: "cycle", sourceId: "target", targetId: "source" }
+    ])
+    expect(wrapper.find(".gantt-link-notice").text()).toContain("循环")
+    expect(wrapper.findAll(".gantt-link-path")).toHaveLength(1)
+  })
+
   it("does not emit successor changes after dragging a linked actual bar", async () => {
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
