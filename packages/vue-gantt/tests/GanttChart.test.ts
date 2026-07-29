@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils"
-import { nextTick } from "vue"
+import { h, nextTick } from "vue"
 import { describe, expect, it, vi } from "vitest"
 import type { GanttMarker, GanttTask, PatchTask } from "@gantt/core"
 import GanttChart from "../src/components/GanttChart.vue"
@@ -146,6 +146,8 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-marker").text()).toContain("Acceptance")
     expect(wrapper.find(".gantt-marker").attributes("title")).toBeUndefined()
     expect(wrapper.find(".gantt-marker [role='tooltip']").exists()).toBe(false)
+    expect(wrapper.find(".gantt-marker-group").attributes("style")).toContain("translateX(675px)")
+    expect(wrapper.find(".gantt-marker-badge-group").attributes("style")).toContain("translateX(675px)")
     expect(wrapper.find(".gantt-bar.milestone").exists()).toBe(false)
     expect(wrapper.find(".gantt-bar.task").text()).toBe("")
     expect(wrapper.findAll(".gantt-plan-bar")).toHaveLength(tasks.length)
@@ -293,6 +295,188 @@ describe("GanttChart", () => {
     cancelAnimationFrame.mockRestore()
   })
 
+  it("keeps the timeline origin fixed while extending actual and plan starts into an earlier week", async () => {
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0)
+        return 1
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{
+          id: "origin-lock",
+          name: "Origin lock",
+          type: "task",
+          plan: { start: "2026-07-08", end: "2026-07-12" },
+          actual: { start: "2026-07-08", end: "2026-07-12", progress: 30 }
+        }],
+        config: { viewMode: "day", columnWidth: 30 }
+      }
+    })
+
+    const initialFirstTick = wrapper.find(".gantt-tick").text()
+    const startHandle = wrapper.find(".gantt-bar.task .gantt-resize.start")
+    await startHandle.trigger("pointerdown", { clientX: 240, pointerId: 1 })
+    await startHandle.trigger("pointermove", { clientX: 60, pointerId: 1 })
+    await nextTick()
+
+    expect(wrapper.find(".gantt-tick").text()).toBe(initialFirstTick)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(-90px")
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("width: 330px")
+    wrapper.unmount()
+
+    const planWrapper = mount(GanttChart, {
+      props: {
+        tasks: [{
+          id: "plan-origin-lock",
+          name: "Plan origin lock",
+          type: "task",
+          plan: { start: "2026-07-08", end: "2026-07-12" },
+          actual: { start: "2026-07-08", end: "2026-07-12", progress: 30 }
+        }],
+        config: { viewMode: "day", columnWidth: 30, editablePlan: true }
+      }
+    })
+    const initialPlanFirstTick = planWrapper.find(".gantt-tick").text()
+    const planStartHandle = planWrapper.find(".gantt-plan-bar.task .gantt-plan-resize.start")
+    await planStartHandle.trigger("pointerdown", { clientX: 240, pointerId: 2 })
+    await planStartHandle.trigger("pointermove", { clientX: 60, pointerId: 2 })
+    await nextTick()
+
+    expect(planWrapper.find(".gantt-tick").text()).toBe(initialPlanFirstTick)
+    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("translate(-90px")
+    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("width: 330px")
+    planWrapper.unmount()
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("keeps actual and plan bars stationary after start resizing reaches one day", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const minimumTasks: GanttTask[] = [{
+      id: "minimum-width",
+      name: "Minimum width",
+      type: "task",
+      plan: { start: "2026-07-01", end: "2026-07-05" },
+      actual: { start: "2026-07-01", end: "2026-07-05", progress: 30 }
+    }]
+    const config = {
+      viewMode: "day" as const,
+      columnWidth: 30,
+      editablePlan: true,
+      visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+    }
+
+    const actualWrapper = mount(GanttChart, { props: { tasks: minimumTasks, config } })
+    const actualStartHandle = actualWrapper.find(".gantt-bar.task .gantt-resize.start")
+    await actualStartHandle.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await actualStartHandle.trigger("pointermove", { clientX: 70, pointerId: 1 })
+    rafCallbacks.shift()?.(0)
+    await actualStartHandle.trigger("pointermove", { clientX: 400, pointerId: 1 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+    const minimumActualStyle = actualWrapper.find(".gantt-bar.task").attributes("style")
+    expect(minimumActualStyle).toContain("width: 30px")
+    expect(actualWrapper.find(".gantt-row").findAll(".gantt-date-cell").slice(2).map((cell) => cell.text())).toEqual([
+      "07-05",
+      "07-05"
+    ])
+
+    await actualStartHandle.trigger("pointermove", { clientX: 700, pointerId: 1 })
+    rafCallbacks.shift()?.(32)
+    await nextTick()
+    expect(actualWrapper.find(".gantt-bar.task").attributes("style")).toBe(minimumActualStyle)
+    actualWrapper.unmount()
+
+    const planWrapper = mount(GanttChart, { props: { tasks: minimumTasks, config } })
+    const planStartHandle = planWrapper.find(".gantt-plan-bar.task .gantt-plan-resize.start")
+    await planStartHandle.trigger("pointerdown", { clientX: 100, pointerId: 2 })
+    await planStartHandle.trigger("pointermove", { clientX: 70, pointerId: 2 })
+    rafCallbacks.shift()?.(48)
+    await planStartHandle.trigger("pointermove", { clientX: 400, pointerId: 2 })
+    rafCallbacks.shift()?.(64)
+    await nextTick()
+    const minimumPlanStyle = planWrapper.find(".gantt-plan-bar.task").attributes("style")
+    expect(minimumPlanStyle).toContain("width: 30px")
+    expect(planWrapper.find(".gantt-row").findAll(".gantt-date-cell").slice(0, 2).map((cell) => cell.text())).toEqual([
+      "07-05",
+      "07-05"
+    ])
+
+    await planStartHandle.trigger("pointermove", { clientX: 700, pointerId: 2 })
+    rafCallbacks.shift()?.(80)
+    await nextTick()
+    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toBe(minimumPlanStyle)
+    planWrapper.unmount()
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("keeps 100 percent plan and actual bar widths stable while moving", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const completedTasks: GanttTask[] = [{
+      id: "completed-move",
+      name: "Completed move",
+      type: "task",
+      plan: { start: "2026-07-01", end: "2026-07-05" },
+      actual: { start: "2026-07-01", end: "2026-07-05", progress: 100 }
+    }]
+    const config = {
+      viewMode: "day" as const,
+      columnWidth: 30,
+      editablePlan: true,
+      visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+    }
+
+    const actualWrapper = mount(GanttChart, { props: { tasks: completedTasks, config } })
+    const initialActualStyle = actualWrapper.find(".gantt-bar.task").attributes("style")
+    const actualBar = actualWrapper.find(".gantt-bar.task")
+    await actualBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await actualBar.trigger("pointermove", { clientX: 160, pointerId: 1 })
+    rafCallbacks.shift()?.(0)
+    await nextTick()
+
+    expect(initialActualStyle).toContain("width: 150px")
+    expect(actualWrapper.find(".gantt-bar.task").attributes("style")).toContain("width: 150px")
+    expect(actualWrapper.find(".gantt-bar.task").attributes("style")).not.toBe(initialActualStyle)
+    actualWrapper.unmount()
+
+    const planWrapper = mount(GanttChart, { props: { tasks: completedTasks, config } })
+    const initialPlanStyle = planWrapper.find(".gantt-plan-bar.task").attributes("style")
+    const planBar = planWrapper.find(".gantt-plan-bar.task")
+    await planBar.trigger("pointerdown", { clientX: 100, pointerId: 2 })
+    await planBar.trigger("pointermove", { clientX: 160, pointerId: 2 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+
+    expect(initialPlanStyle).toContain("width: 150px")
+    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("width: 150px")
+    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).not.toBe(initialPlanStyle)
+    expect(planWrapper.find(".gantt-plan-progress").attributes("style")).toContain("width: 100%")
+    planWrapper.unmount()
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
   it("extends the plan bar when dragging the start handle left", async () => {
     const rafCallbacks: FrameRequestCallback[] = []
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
@@ -334,7 +518,79 @@ describe("GanttChart", () => {
     cancelAnimationFrame.mockRestore()
   })
 
-  it("keeps constrained successor drags at the allowed dependency boundary", async () => {
+  it("updates summary plan and actual bars during child drag previews", async () => {
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0)
+        return 1
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const summaryTasks: GanttTask[] = [
+      {
+        id: "phase",
+        name: "Phase",
+        type: "summary",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-02", end: "2026-07-06", progress: 40 }
+      },
+      {
+        id: "phase-child",
+        name: "Phase child",
+        type: "task",
+        parentId: "phase",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-02", end: "2026-07-06", progress: 40 }
+      }
+    ]
+    const commonConfig = {
+      viewMode: "day" as const,
+      columnWidth: 30,
+      editablePlan: true,
+      visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+    }
+
+    const actualWrapper = mount(GanttChart, {
+      props: { tasks: summaryTasks, config: commonConfig }
+    })
+    const initialActualStyle = actualWrapper.find(".gantt-bar.summary").attributes("style")
+    const childActualBar = actualWrapper.find(".gantt-bar.task")
+    await childActualBar.trigger("pointerdown", { clientX: 120, pointerId: 1 })
+    await childActualBar.trigger("pointermove", { clientX: 180, pointerId: 1 })
+    await nextTick()
+
+    expect(actualWrapper.find(".gantt-bar.summary").attributes("style")).not.toBe(initialActualStyle)
+    expect(actualWrapper.findAll(".gantt-row")[0].findAll(".gantt-date-cell").map((cell) => cell.text())).toEqual([
+      "07-01",
+      "07-05",
+      "07-04",
+      "07-08"
+    ])
+    actualWrapper.unmount()
+
+    const planWrapper = mount(GanttChart, {
+      props: { tasks: summaryTasks, config: commonConfig }
+    })
+    const initialPlanStyle = planWrapper.find(".gantt-plan-bar.summary").attributes("style")
+    const childPlanBar = planWrapper.find(".gantt-plan-bar.task")
+    await childPlanBar.trigger("pointerdown", { clientX: 120, pointerId: 2 })
+    await childPlanBar.trigger("pointermove", { clientX: 180, pointerId: 2 })
+    await nextTick()
+
+    expect(planWrapper.find(".gantt-plan-bar.summary").attributes("style")).not.toBe(initialPlanStyle)
+    expect(planWrapper.findAll(".gantt-row")[0].findAll(".gantt-date-cell").map((cell) => cell.text())).toEqual([
+      "07-03",
+      "07-07",
+      "07-02",
+      "07-06"
+    ])
+    planWrapper.unmount()
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("constrains linked plan drags while leaving actual drags independent", async () => {
     const rafCallbacks: FrameRequestCallback[] = []
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
@@ -359,25 +615,46 @@ describe("GanttChart", () => {
         actual: { start: "2026-07-07", end: "2026-07-09", progress: 20 }
       }
     ]
-    const wrapper = mount(GanttChart, {
+    const actualWrapper = mount(GanttChart, {
       props: {
         tasks: linkedTasks,
         links: [{ id: "l1", sourceId: "source", targetId: "target", type: "SS" }],
         config: {
           viewMode: "day",
           columnWidth: 30,
+          editablePlan: true,
           visibleRange: { start: "2026-07-01", end: "2026-07-31" }
         }
       }
     })
 
-    const targetBar = wrapper.findAll(".gantt-bar.task")[1]
-    await targetBar.trigger("pointerdown", { clientX: 200, pointerId: 1 })
-    await targetBar.trigger("pointermove", { clientX: 80, pointerId: 1 })
+    const targetActualBar = actualWrapper.findAll(".gantt-bar.task")[1]
+    await targetActualBar.trigger("pointerdown", { clientX: 200, pointerId: 1 })
+    await targetActualBar.trigger("pointermove", { clientX: 80, pointerId: 1 })
     rafCallbacks.shift()?.(0)
     await nextTick()
+    expect(actualWrapper.findAll(".gantt-bar.task")[1].attributes("style")).toContain("translate(150px")
+    actualWrapper.unmount()
 
-    expect(wrapper.findAll(".gantt-bar.task")[1].attributes("style")).toContain("translate(210px")
+    const planWrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "SS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          editablePlan: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+    const targetPlanBar = planWrapper.findAll(".gantt-plan-bar.task")[1]
+    await targetPlanBar.trigger("pointerdown", { clientX: 200, pointerId: 2 })
+    await targetPlanBar.trigger("pointermove", { clientX: 80, pointerId: 2 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+    expect(planWrapper.findAll(".gantt-plan-bar.task")[1].attributes("style")).toContain("translate(210px")
+    planWrapper.unmount()
 
     requestAnimationFrame.mockRestore()
     cancelAnimationFrame.mockRestore()
@@ -549,23 +826,45 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-bar.task .gantt-overdue-segment").exists()).toBe(true)
   })
 
-  it("supports hiding plan bars and exposing editable plan handles", () => {
-    const hidden = mount(GanttChart, {
+  it("controls plan and actual visibility and drag permissions independently", async () => {
+    const hiddenPlan = mount(GanttChart, {
       props: {
         tasks,
         config: { viewMode: "day", showPlanBar: false }
       }
     })
-    expect(hidden.find(".gantt-plan-bar").exists()).toBe(false)
+    expect(hiddenPlan.find(".gantt-plan-bar").exists()).toBe(false)
+    expect(hiddenPlan.find(".gantt-bar").exists()).toBe(true)
 
-    const editable = mount(GanttChart, {
+    const editablePlan = mount(GanttChart, {
       props: {
         tasks,
         config: { viewMode: "day", editablePlan: true }
       }
     })
-    expect(editable.find(".gantt-plan-bar.editable").exists()).toBe(true)
-    expect(editable.find(".gantt-plan-resize").exists()).toBe(true)
+    expect(editablePlan.find(".gantt-plan-bar.editable").exists()).toBe(true)
+    expect(editablePlan.find(".gantt-plan-resize").exists()).toBe(true)
+
+    const hiddenActual = mount(GanttChart, {
+      props: {
+        tasks,
+        config: { viewMode: "day", showActualBar: false }
+      }
+    })
+    expect(hiddenActual.find(".gantt-bar").exists()).toBe(false)
+    expect(hiddenActual.find(".gantt-plan-bar").exists()).toBe(true)
+
+    const lockedActual = mount(GanttChart, {
+      props: {
+        tasks,
+        config: { viewMode: "day", editableActual: false }
+      }
+    })
+    const actualTaskBar = lockedActual.find(".gantt-bar.task")
+    expect(actualTaskBar.classes()).toContain("locked")
+    await actualTaskBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await actualTaskBar.trigger("pointerup", { clientX: 160, pointerId: 1 })
+    expect(lockedActual.emitted("taskChange")).toBeUndefined()
   })
 
   it("keeps plan bars above actual bars and milestones pinned to the visible timeline body", async () => {
@@ -661,7 +960,7 @@ describe("GanttChart", () => {
     ]))
   })
 
-  it("emits impacted successor dates after dragging a linked task", async () => {
+  it("does not emit successor changes after dragging a linked actual bar", async () => {
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
         callback(0)
@@ -701,9 +1000,64 @@ describe("GanttChart", () => {
     await sourceBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
     await sourceBar.trigger("pointerup", { clientX: 160, pointerId: 1 })
 
+    expect(wrapper.emitted("taskChange")).toEqual([
+      ["source", expect.objectContaining({ actualStart: expect.any(Date), actualEnd: expect.any(Date) })]
+    ])
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("previews and emits successor plan changes after dragging a linked plan bar", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const linkedTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-06", end: "2026-07-08" },
+        actual: { start: "2026-07-06", end: "2026-07-08", progress: 20 }
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "FS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          editablePlan: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+
+    const targetInitialStyle = wrapper.findAll(".gantt-plan-bar.task")[1].attributes("style")
+    const sourcePlanBar = wrapper.findAll(".gantt-plan-bar.task")[0]
+    await sourcePlanBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await sourcePlanBar.trigger("pointermove", { clientX: 160, pointerId: 1 })
+    rafCallbacks.shift()?.(0)
+    await nextTick()
+    expect(wrapper.findAll(".gantt-plan-bar.task")[1].attributes("style")).not.toBe(targetInitialStyle)
+
+    await sourcePlanBar.trigger("pointerup", { clientX: 160, pointerId: 1 })
     expect(wrapper.emitted("taskChange")).toEqual(expect.arrayContaining([
-      ["source", expect.objectContaining({ actualStart: expect.any(Date), actualEnd: expect.any(Date) })],
-      ["target", expect.objectContaining({ actualStart: expect.any(Date), actualEnd: expect.any(Date) })]
+      ["source", expect.objectContaining({ planStart: expect.any(Date), planEnd: expect.any(Date) })],
+      ["target", expect.objectContaining({ planStart: expect.any(Date), planEnd: expect.any(Date) })]
     ]))
 
     requestAnimationFrame.mockRestore()
@@ -813,6 +1167,8 @@ describe("GanttChart", () => {
     })
 
     await wrapper.findAll(".gantt-actions button")[2].trigger("click")
+    expect(wrapper.find(".gantt-task-drawer").exists()).toBe(false)
+    expect(wrapper.find(".gantt-editor").exists()).toBe(true)
     await wrapper.find(".gantt-editor button.primary").trigger("click")
 
     const created = wrapper.emitted("markerCreate")?.[0]?.[0] as GanttMarker
@@ -870,14 +1226,160 @@ describe("GanttChart", () => {
     })
 
     await wrapper.findAll(".gantt-row")[1].trigger("dblclick")
+    expect(wrapper.find(".gantt-task-drawer").exists()).toBe(true)
     const input = wrapper.find(".gantt-editor input[type='text']")
     await input.setValue("Edited child task")
+    const ownerInput = wrapper.findAll(".gantt-editor label")
+      .find((label) => label.text().includes("负责人"))
+      ?.find("input")
+    await ownerInput!.setValue("Bob")
     await wrapper.find(".gantt-editor button.primary").trigger("click")
 
     expect(wrapper.emitted("taskChange")?.[0]).toMatchObject([
       "task-1",
-      { name: "Edited child task" }
+      { name: "Edited child task", resources: ["Bob"] }
     ])
+  })
+
+  it("opens the task editor by double-clicking either the plan or actual bar", async () => {
+    const standaloneTask: GanttTask = {
+      ...tasks[1],
+      parentId: null
+    }
+    const planWrapper = mount(GanttChart, {
+      props: {
+        tasks: [standaloneTask],
+        config: {
+          viewMode: "day",
+          editablePlan: false,
+          editableActual: false
+        }
+      }
+    })
+
+    await planWrapper.find(".gantt-plan-bar.task").trigger("dblclick")
+    expect(planWrapper.find(".gantt-task-drawer").exists()).toBe(true)
+
+    const actualWrapper = mount(GanttChart, {
+      props: {
+        tasks: [standaloneTask],
+        config: {
+          viewMode: "day",
+          editablePlan: false,
+          editableActual: false
+        }
+      }
+    })
+
+    await actualWrapper.find(".gantt-bar.task").trigger("dblclick")
+    expect(actualWrapper.find(".gantt-task-drawer").exists()).toBe(true)
+  })
+
+  it("supports configured columns, scoped cell slots, and custom editor values", async () => {
+    const customTasks: GanttTask[] = [{
+      ...tasks[1],
+      parentId: null,
+      resources: ["Alice"],
+      custom: { budget: 12 }
+    }]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: customTasks,
+        config: {
+          viewMode: "day",
+          columns: [
+            { key: "name", label: "工作项", width: 180, align: "left" },
+            { key: "budget", label: "预算", width: 90, type: "number", editable: true }
+          ]
+        }
+      },
+      slots: {
+        "cell-budget": ({ value }: { value: unknown }) => h("strong", { class: "budget-slot" }, `¥${value}`)
+      }
+    })
+
+    expect(wrapper.find(".gantt-table-head").text()).toContain("工作项")
+    expect(wrapper.find(".gantt-table-head").text()).toContain("预算")
+    expect(wrapper.find(".gantt-table-head").attributes("style")).toContain("180px 90px")
+    expect(wrapper.find(".budget-slot").text()).toBe("¥12")
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+    const customInput = wrapper.findAll(".gantt-editor label")
+      .find((label) => label.text().includes("预算"))
+      ?.find("input")
+    expect(customInput?.exists()).toBe(true)
+    await customInput!.setValue("25")
+    await wrapper.find(".gantt-editor button.primary").trigger("click")
+
+    expect(wrapper.emitted("taskChange")?.[0]).toMatchObject([
+      "task-1",
+      {
+        planStart: "2026-07-01",
+        planEnd: "2026-07-09",
+        actualStart: "2026-07-02",
+        actualEnd: "2026-07-09",
+        resources: ["Alice"],
+        custom: { budget: 25 }
+      }
+    ])
+  })
+
+  it("updates overdue bar styling while the actual end is being dragged", async () => {
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0)
+        return 1
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{
+          id: "drag-overdue",
+          name: "Drag overdue",
+          type: "task",
+          plan: { start: "2026-07-01", end: "2026-07-05" },
+          actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+        }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+
+    const endHandle = wrapper.find(".gantt-bar.task .gantt-resize.end")
+    expect(wrapper.find(".gantt-bar.task").classes()).not.toContain("overdue")
+    await endHandle.trigger("pointerdown", { clientX: 150, pointerId: 1 })
+    await endHandle.trigger("pointermove", { clientX: 180, pointerId: 1 })
+    await nextTick()
+
+    expect(wrapper.find(".gantt-bar.task").classes()).toContain("overdue")
+    expect(wrapper.find(".gantt-overdue-segment").attributes("style")).not.toContain("display: none")
+
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("applies chart dimensions, row height, and view-specific cell width", () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        config: {
+          viewMode: "day",
+          width: 840,
+          height: 480,
+          rowHeight: 52,
+          columnWidths: { day: 42 }
+        }
+      }
+    })
+
+    expect(wrapper.find(".gantt-chart").attributes("style")).toContain("width: 840px")
+    expect(wrapper.find(".gantt-chart").attributes("style")).toContain("height: 480px")
+    expect(wrapper.find(".gantt-row").attributes("style")).toContain("height: 52px")
+    expect(wrapper.find(".gantt-tick").attributes("style")).toContain("width: 42px")
   })
 })
 

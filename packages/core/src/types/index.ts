@@ -50,6 +50,7 @@ export interface GanttTask {
   }
   schedulingMode?: "auto" | "manual"
   duration?: number
+  custom?: Record<string, unknown>
 }
 
 export interface GanttMarker {
@@ -63,6 +64,15 @@ export interface CustomColumn {
   key: string
   label: string
   width?: number
+  visible?: boolean
+  align?: "left" | "center" | "right"
+  editable?: boolean
+  type?: "text" | "number" | "date" | "select"
+  options?: Array<{ label: string; value: string | number }>
+  placeholder?: string
+  formatter?: (value: unknown, task: GanttTask) => string
+  cellClass?: string | ((task: GanttTask) => string)
+  cellStyle?: Record<string, string | number> | ((task: GanttTask) => Record<string, string | number>)
   render?: (task: GanttTask) => { text: string; className?: string }
 }
 
@@ -72,17 +82,23 @@ export interface GanttConfig {
   columnWidth: number
   headerHeight: number
   taskListWidth: number
+  width?: string | number
+  height?: string | number
   locale: string
   firstDayOfWeek: 0 | 1
   dateFormat: string
   customColumns?: CustomColumn[]
+  columns?: CustomColumn[]
+  columnWidths?: Partial<Record<ViewMode, number>>
   theme?: "light" | "dark" | string
   visibleRange?: {
     start: string | Date
     end: string | Date
   }
   showPlanBar?: boolean
+  showActualBar?: boolean
   editablePlan?: boolean
+  editableActual?: boolean
   enableLinkCreation?: boolean
   virtualScroll?: boolean
   taskColors?: {
@@ -171,6 +187,9 @@ export interface PatchTask {
   color?: string
   duration?: number
   schedulingMode?: "auto" | "manual"
+  resources?: string[]
+  calendarId?: string
+  custom?: Record<string, unknown>
 }
 
 export const defaultConfig: GanttConfig = {
@@ -183,7 +202,9 @@ export const defaultConfig: GanttConfig = {
   firstDayOfWeek: 0,
   dateFormat: "YYYY-MM-DD",
   showPlanBar: true,
+  showActualBar: true,
   editablePlan: false,
+  editableActual: true,
   enableLinkCreation: true,
   virtualScroll: true,
   taskColors: {

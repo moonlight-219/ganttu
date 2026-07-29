@@ -105,6 +105,21 @@ function handleTaskChange(id: string, patch: PatchTask) {
     if (patch.color) {
       next.color = patch.color
     }
+    if ("resources" in patch) {
+      next.resources = patch.resources
+    }
+    if ("calendarId" in patch) {
+      next.calendarId = patch.calendarId
+    }
+    if ("duration" in patch) {
+      next.duration = patch.duration
+    }
+    if ("schedulingMode" in patch) {
+      next.schedulingMode = patch.schedulingMode
+    }
+    if ("custom" in patch) {
+      next.custom = patch.custom
+    }
     if (next.type === "milestone") {
       next.actual.end = next.actual.start
       next.plan.end = next.plan.start

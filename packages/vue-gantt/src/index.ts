@@ -4,6 +4,7 @@ import GanttChart from "./components/GanttChart.vue"
 export { GanttChart }
 export default GanttChart
 export type {
+  CustomColumn,
   GanttConfig,
   GanttLink,
   GanttMarker,
