@@ -5,6 +5,7 @@ export { GanttChart }
 export default GanttChart
 export type {
   CustomColumn,
+  GanttEditorField,
   GanttConfig,
   GanttLink,
   GanttMarker,
@@ -12,3 +13,9 @@ export type {
   PatchTask,
   ViewMode
 } from "@gantt/core"
+export type {
+  GanttMarkerEditRequest,
+  GanttMarkerEditorDraft,
+  GanttTaskEditRequest,
+  GanttTaskEditorDraft
+} from "./types"

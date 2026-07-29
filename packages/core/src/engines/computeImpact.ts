@@ -52,6 +52,9 @@ export function computeImpact(
     if (patch.color) {
       next.color = patch.color
     }
+    if ("planColor" in patch) {
+      next.planColor = patch.planColor
+    }
     if (patch.schedulingMode) {
       next.schedulingMode = patch.schedulingMode
     }

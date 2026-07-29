@@ -41,6 +41,7 @@ export interface GanttTask {
   dependencies?: Dependency[]
   parentId?: string | null
   color?: string
+  planColor?: string
   calendarId?: string
   resources?: string[]
   segments?: Array<{ start: string | Date; end: string | Date }>
@@ -60,6 +61,16 @@ export interface GanttMarker {
   color?: string
 }
 
+export interface GanttEditorField {
+  key: string
+  label: string
+  visible?: boolean
+  editable?: boolean
+  type?: "text" | "number" | "date" | "select"
+  options?: Array<{ label: string; value: string | number }>
+  placeholder?: string
+}
+
 export interface CustomColumn {
   key: string
   label: string
@@ -70,6 +81,7 @@ export interface CustomColumn {
   type?: "text" | "number" | "date" | "select"
   options?: Array<{ label: string; value: string | number }>
   placeholder?: string
+  editor?: Omit<GanttEditorField, "key" | "label">
   formatter?: (value: unknown, task: GanttTask) => string
   cellClass?: string | ((task: GanttTask) => string)
   cellStyle?: Record<string, string | number> | ((task: GanttTask) => Record<string, string | number>)
@@ -89,6 +101,7 @@ export interface GanttConfig {
   dateFormat: string
   customColumns?: CustomColumn[]
   columns?: CustomColumn[]
+  editorFields?: GanttEditorField[]
   columnWidths?: Partial<Record<ViewMode, number>>
   theme?: "light" | "dark" | string
   visibleRange?: {
@@ -97,6 +110,8 @@ export interface GanttConfig {
   }
   showPlanBar?: boolean
   showActualBar?: boolean
+  builtInTaskEditor?: boolean
+  builtInMarkerEditor?: boolean
   editablePlan?: boolean
   editableActual?: boolean
   enableLinkCreation?: boolean
@@ -185,6 +200,7 @@ export interface PatchTask {
   type?: GanttTask["type"]
   parentId?: string | null
   color?: string
+  planColor?: string
   duration?: number
   schedulingMode?: "auto" | "manual"
   resources?: string[]
@@ -203,6 +219,8 @@ export const defaultConfig: GanttConfig = {
   dateFormat: "YYYY-MM-DD",
   showPlanBar: true,
   showActualBar: true,
+  builtInTaskEditor: true,
+  builtInMarkerEditor: true,
   editablePlan: false,
   editableActual: true,
   enableLinkCreation: true,

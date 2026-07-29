@@ -10,6 +10,7 @@ import {
   toDate,
   type CustomColumn,
   type GanttConfig,
+  type GanttEditorField,
   type GanttLink,
   type GanttMarker,
   type GanttTask,
@@ -19,9 +20,17 @@ import {
   type ViewMode
 } from "@gantt/core"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import GanttDatePicker from "./GanttDatePicker.vue"
+import GanttSelect from "./GanttSelect.vue"
 import { drawGrid } from "../rendering/canvas/grid"
 import { buildOrthogonalLinkPath, taskAnchorPoint, type LinkAnchor } from "../rendering/canvas/links"
 import { setupCanvas } from "../rendering/canvas/viewport"
+import type {
+  GanttMarkerEditRequest,
+  GanttMarkerEditorDraft,
+  GanttTaskEditRequest,
+  GanttTaskEditorDraft
+} from "../types"
 
 const props = withDefaults(defineProps<{
   tasks: GanttTask[]
@@ -33,9 +42,11 @@ const props = withDefaults(defineProps<{
   onTaskChange?: (id: string, patch: PatchTask) => void
   onTaskCreate?: (task: GanttTask) => void
   onTaskDelete?: (id: string) => void
+  onTaskEditRequest?: (request: GanttTaskEditRequest) => void
   onMarkerCreate?: (marker: GanttMarker) => void
   onMarkerChange?: (id: string, marker: GanttMarker) => void
   onMarkerDelete?: (id: string) => void
+  onMarkerEditRequest?: (request: GanttMarkerEditRequest) => void
   onLinkChange?: (links: GanttLink[]) => void
   onViewModeChange?: (mode: ViewMode) => void
 }>(), {
@@ -47,9 +58,11 @@ const emit = defineEmits<{
   taskChange: [id: string, patch: PatchTask]
   taskCreate: [task: GanttTask]
   taskDelete: [id: string]
+  taskEditRequest: [request: GanttTaskEditRequest]
   markerCreate: [marker: GanttMarker]
   markerChange: [id: string, marker: GanttMarker]
   markerDelete: [id: string]
+  markerEditRequest: [request: GanttMarkerEditRequest]
   linkChange: [links: GanttLink[]]
   viewModeChange: [mode: ViewMode]
 }>()
@@ -60,10 +73,42 @@ const viewOptions: Array<{ mode: ViewMode; label: string }> = [
   { mode: "month", label: "年/月" },
   { mode: "quarter", label: "年/季度" }
 ]
-const PLAN_BAR_TOP = 7
 const PLAN_BAR_HEIGHT = 12
-const ACTUAL_BAR_TOP = 23
 const ACTUAL_BAR_HEIGHT = 14
+const BAR_VERTICAL_GAP = 4
+const editorColorOptions = [
+  "#2563eb",
+  "#8b5cf6",
+  "#ec4899",
+  "#d97706",
+  "#eab308",
+  "#10b981",
+  "#06b6d4",
+  "#64748b"
+]
+type GanttSelectOption = {
+  label: string
+  value: string | number
+  disabled?: boolean
+}
+const taskTypeOptions: GanttSelectOption[] = [
+  { label: "任务", value: "task" },
+  { label: "阶段", value: "summary" }
+]
+const schedulingModeOptions: GanttSelectOption[] = [
+  { label: "自动", value: "auto" },
+  { label: "手动", value: "manual" }
+]
+const linkTypeOptions: GanttSelectOption[] = [
+  { label: "FS · 完成-开始", value: "FS" },
+  { label: "SS · 开始-开始", value: "SS" },
+  { label: "FF · 完成-完成", value: "FF" },
+  { label: "SF · 开始-完成", value: "SF" }
+]
+const lagUnitOptions: GanttSelectOption[] = [
+  { label: "日历天", value: "calendar" },
+  { label: "工作日", value: "working" }
+]
 const collapsedIds = ref(new Set<string>())
 const selectedTaskId = ref<string | null>(null)
 const scrollLeft = ref(0)
@@ -79,7 +124,7 @@ let linkDraftFrame = 0
 let pendingLinkDraftPoint: { x: number; y: number } | null = null
 const editorOpen = ref(false)
 const editMode = ref<"create" | "edit">("edit")
-const editDraft = ref({
+const editDraft = ref<GanttTaskEditorDraft>({
   id: "",
   name: "",
   type: "task" as GanttTask["type"],
@@ -90,6 +135,7 @@ const editDraft = ref({
   actualEnd: "",
   progress: 0,
   color: "#2563eb",
+  planColor: "#cbd5e1",
   resources: "",
   calendarId: "",
   duration: 0,
@@ -98,7 +144,7 @@ const editDraft = ref({
 })
 const markerEditorOpen = ref(false)
 const markerEditMode = ref<"create" | "edit">("create")
-const markerDraft = ref({
+const markerDraft = ref<GanttMarkerEditorDraft>({
   id: "",
   name: "",
   date: "",
@@ -197,6 +243,14 @@ const normalizedLinks = computed(() => {
 })
 const flatTasks = computed(() => flattenTasks(displayedTasks.value, collapsedIds.value))
 const summaryOptions = computed(() => displayedTasks.value.filter((task) => task.type === "summary"))
+const parentSelectOptions = computed<GanttSelectOption[]>(() => [
+  { label: "无", value: "" },
+  ...summaryOptions.value.map((summary) => ({
+    label: summary.name,
+    value: summary.id,
+    disabled: summary.id === editDraft.value.id
+  }))
+])
 const dateRange = computed(() => {
   if (mergedConfig.value.visibleRange) {
     return {
@@ -329,6 +383,23 @@ const renderedLayouts = computed<TaskLayout[]>(() => [
 ])
 const layoutById = computed(() => new Map(renderedLayouts.value.map((layout) => [layout.taskId, layout])))
 const visibleRows = computed(() => flatTasks.value.slice(visibleWindow.value.start, visibleWindow.value.end + 1))
+
+function barVerticalMetrics() {
+  const outerGap = Math.max(
+    0,
+    Math.floor((
+      mergedConfig.value.rowHeight
+      - PLAN_BAR_HEIGHT
+      - ACTUAL_BAR_HEIGHT
+      - BAR_VERTICAL_GAP
+    ) / 2)
+  )
+  return {
+    planTop: outerGap,
+    actualTop: mergedConfig.value.rowHeight - outerGap - ACTUAL_BAR_HEIGHT
+  }
+}
+
 const selectedLink = computed(() => selectedLinkId.value ? normalizedLinks.value.find((link) => link.id === selectedLinkId.value) ?? null : null)
 const linkOverlayItems = computed(() => {
   return normalizedLinks.value.flatMap((link) => {
@@ -343,8 +414,9 @@ const linkOverlayItems = computed(() => {
     const target = planLinkLayout(targetLayout, targetTask)
     const sourceAnchor = link.type === "SS" || link.type === "SF" ? "start" : "finish"
     const targetAnchor = link.type === "SS" || link.type === "FS" ? "start" : "finish"
-    const start = taskAnchorPoint(source, sourceAnchor, mergedConfig.value.headerHeight, PLAN_BAR_TOP, PLAN_BAR_HEIGHT)
-    const end = taskAnchorPoint(target, targetAnchor, mergedConfig.value.headerHeight, PLAN_BAR_TOP, PLAN_BAR_HEIGHT)
+    const { planTop } = barVerticalMetrics()
+    const start = taskAnchorPoint(source, sourceAnchor, mergedConfig.value.headerHeight, planTop, PLAN_BAR_HEIGHT)
+    const end = taskAnchorPoint(target, targetAnchor, mergedConfig.value.headerHeight, planTop, PLAN_BAR_HEIGHT)
     return [{
       link,
       points: buildOrthogonalLinkPath(start, end, sourceAnchor, targetAnchor).map((point) => `${point.x},${point.y}`).join(" ")
@@ -571,12 +643,97 @@ const builtinColumnKeys = new Set([
   "progress"
 ])
 
-const customEditorColumns = computed(() => tableColumns.value.filter((column) =>
-  !builtinColumnKeys.has(column.key)
+const builtinEditorKeys = new Set([
+  "name",
+  "type",
+  "parentId",
+  "planStart",
+  "planEnd",
+  "actualStart",
+  "actualEnd",
+  "progress",
+  "resources",
+  "duration",
+  "calendarId",
+  "schedulingMode",
+  "color",
+  "planColor"
+])
+const defaultTaskEditorFields: GanttEditorField[] = [
+  { key: "name", label: "名称", type: "text", editable: true },
+  {
+    key: "type",
+    label: "类型",
+    type: "select",
+    editable: true,
+    options: [
+      { label: "任务", value: "task" },
+      { label: "阶段", value: "summary" }
+    ]
+  },
+  { key: "parentId", label: "父级阶段", type: "select", editable: true },
+  { key: "planStart", label: "计划开始", type: "date", editable: true },
+  { key: "planEnd", label: "计划完成", type: "date", editable: true },
+  { key: "actualStart", label: "实际开始", type: "date", editable: true },
+  { key: "actualEnd", label: "实际完成", type: "date", editable: true },
+  { key: "progress", label: "进度", type: "number", editable: true },
+  { key: "resources", label: "负责人", type: "text", editable: true },
+  { key: "duration", label: "工期", type: "number", editable: true },
+  { key: "calendarId", label: "日历 ID", type: "text", editable: true },
+  {
+    key: "schedulingMode",
+    label: "排程方式",
+    type: "select",
+    editable: true,
+    options: [
+      { label: "自动", value: "auto" },
+      { label: "手动", value: "manual" }
+    ]
+  },
+  { key: "color", label: "实际条颜色", editable: true },
+  { key: "planColor", label: "计划条颜色", editable: true }
+]
+const resolvedEditorFields = computed<GanttEditorField[]>(() => {
+  const configured = new Map((mergedConfig.value.editorFields ?? []).map((field) => [field.key, field]))
+  const customTableFields = tableColumns.value
+    .filter((column) => !builtinColumnKeys.has(column.key))
+    .map((column) => ({
+    key: column.key,
+    label: column.label,
+    visible: true,
+    editable: column.editable,
+    type: column.type,
+    options: column.options,
+    placeholder: column.placeholder,
+    ...(column.editor ?? {}),
+    ...(configured.get(column.key) ?? {})
+  }))
+  const defaultFields = defaultTaskEditorFields.map((field) => ({
+    ...field,
+    ...(configured.get(field.key) ?? {})
+  }))
+  const fieldKeys = new Set([
+    ...defaultFields.map((field) => field.key),
+    ...customTableFields.map((field) => field.key)
+  ])
+  const additionalFields = (mergedConfig.value.editorFields ?? [])
+    .filter((field) => !fieldKeys.has(field.key))
+  return [...defaultFields, ...customTableFields, ...additionalFields].filter((field) => field.visible !== false)
+})
+const customEditorColumns = computed<CustomColumn[]>(() => resolvedEditorFields.value.filter((field) =>
+  !builtinEditorKeys.has(field.key)
 ))
 const editableCustomColumns = computed(() => customEditorColumns.value.filter((column) =>
   column.editable === true
 ))
+
+function editorFieldVisible(key: string): boolean {
+  return mergedConfig.value.editorFields?.find((field) => field.key === key)?.visible !== false
+}
+
+function editorFieldEditable(key: string): boolean {
+  return mergedConfig.value.editorFields?.find((field) => field.key === key)?.editable !== false
+}
 
 function columnValue(column: CustomColumn, task: GanttTask): unknown {
   const displayTask = previewTask(task)
@@ -621,6 +778,30 @@ function customEditorInputType(column: CustomColumn): string {
   return "text"
 }
 
+function setTaskType(value: string | number) {
+  editDraft.value.type = String(value) as GanttTask["type"]
+}
+
+function setParentId(value: string | number) {
+  editDraft.value.parentId = String(value)
+}
+
+function setSchedulingMode(value: string | number) {
+  editDraft.value.schedulingMode = String(value) as NonNullable<GanttTask["schedulingMode"]>
+}
+
+function setCustomEditorValue(key: string, value: string | number) {
+  editDraft.value.custom[key] = value
+}
+
+function setLinkType(value: string | number) {
+  linkEditDraft.value.type = String(value) as GanttLink["type"]
+}
+
+function setLagUnit(value: string | number) {
+  linkEditDraft.value.lagUnit = String(value) as NonNullable<GanttLink["lagUnit"]>
+}
+
 function normalizedCustomDraft(): Record<string, unknown> {
   const custom = { ...editDraft.value.custom }
   for (const column of editableCustomColumns.value) {
@@ -633,6 +814,22 @@ function normalizedCustomDraft(): Record<string, unknown> {
 
 function setViewMode(viewMode: ViewMode) {
   emit("viewModeChange", viewMode)
+}
+
+function taskEditRequest(task?: GanttTask): GanttTaskEditRequest {
+  return {
+    mode: editMode.value,
+    task,
+    taskType: editDraft.value.type,
+    draft: {
+      ...editDraft.value,
+      custom: { ...editDraft.value.custom }
+    },
+    fields: resolvedEditorFields.value.map((field) => ({
+      ...field,
+      options: field.options?.map((option) => ({ ...option }))
+    }))
+  }
 }
 
 function openEditor(task: GanttTask) {
@@ -649,13 +846,15 @@ function openEditor(task: GanttTask) {
     actualEnd: formatDate(task.actual.end),
     progress: task.actual.progress,
     color: task.color || defaultTaskColor(task.type),
+    planColor: task.planColor || defaultPlanColor(),
     resources: task.resources?.join(", ") ?? "",
     calendarId: task.calendarId ?? "",
     duration: task.duration ?? taskDurationDays(task.actual.start, task.actual.end),
     schedulingMode: task.schedulingMode ?? "auto",
     custom: { ...(task.custom ?? {}) }
   }
-  editorOpen.value = true
+  emit("taskEditRequest", taskEditRequest(task))
+  editorOpen.value = mergedConfig.value.builtInTaskEditor !== false
 }
 
 function openCreateEditor(type: GanttTask["type"]) {
@@ -673,13 +872,15 @@ function openCreateEditor(type: GanttTask["type"]) {
     actualEnd: type === "milestone" ? start : formatDate(addDays(start, 4)),
     progress: 0,
     color: defaultTaskColor(type),
+    planColor: defaultPlanColor(),
     resources: "",
     calendarId: "",
     duration: type === "milestone" ? 1 : 5,
     schedulingMode: "auto",
     custom: Object.fromEntries(customEditorColumns.value.map((column) => [column.key, ""]))
   }
-  editorOpen.value = true
+  emit("taskEditRequest", taskEditRequest())
+  editorOpen.value = mergedConfig.value.builtInTaskEditor !== false
 }
 
 function openCreateMarker() {
@@ -691,7 +892,11 @@ function openCreateMarker() {
     date: selected ? formatDate(selected.actual.end) : formatDate(dateRange.value.start),
     color: "#d97706"
   }
-  markerEditorOpen.value = true
+  emit("markerEditRequest", {
+    mode: markerEditMode.value,
+    draft: { ...markerDraft.value }
+  })
+  markerEditorOpen.value = mergedConfig.value.builtInMarkerEditor !== false
 }
 
 function openMarkerEditor(marker: GanttMarker) {
@@ -702,7 +907,12 @@ function openMarkerEditor(marker: GanttMarker) {
     date: formatDate(marker.date),
     color: marker.color || "#d97706"
   }
-  markerEditorOpen.value = true
+  emit("markerEditRequest", {
+    mode: markerEditMode.value,
+    marker,
+    draft: { ...markerDraft.value }
+  })
+  markerEditorOpen.value = mergedConfig.value.builtInMarkerEditor !== false
 }
 
 function closeMarkerEditor() {
@@ -799,6 +1009,7 @@ function saveEditor() {
       plan: { start: planStart, end: planEnd, progress: editDraft.value.progress },
       actual: { start: actualStart, end: actualEnd, progress: clampProgress(editDraft.value.progress) },
       color: editDraft.value.color,
+      planColor: editDraft.value.planColor,
       resources,
       calendarId: editDraft.value.calendarId || undefined,
       duration: Math.max(0, Number(editDraft.value.duration) || 0),
@@ -818,6 +1029,7 @@ function saveEditor() {
       actualEnd,
       progress: clampProgress(editDraft.value.progress),
       color: editDraft.value.color,
+      planColor: editDraft.value.planColor,
       resources,
       calendarId: editDraft.value.calendarId || undefined,
       duration: Math.max(0, Number(editDraft.value.duration) || 0),
@@ -1036,9 +1248,10 @@ function taskStyle(layout: TaskLayout, task: GanttTask) {
       )
     : layout.width
   const rowTop = layout.top - mergedConfig.value.headerHeight
+  const { actualTop } = barVerticalMetrics()
   const top = displayTask.type === "milestone"
     ? scrollTop.value
-    : rowTop + (displayTask.type === "summary" ? ACTUAL_BAR_TOP + 1 : ACTUAL_BAR_TOP)
+    : rowTop + (displayTask.type === "summary" ? actualTop + 1 : actualTop)
   const height = displayTask.type === "milestone"
     ? viewportHeight.value
     : displayTask.type === "summary" ? 8 : ACTUAL_BAR_HEIGHT
@@ -1059,12 +1272,16 @@ function planBarStyle(layout: TaskLayout, task: GanttTask) {
   const left = Math.round((start.getTime() - timelineStart.value.getTime()) / 86400000) * dayWidth
   const width = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
   const rowTop = layout.top - mergedConfig.value.headerHeight
+  const { planTop } = barVerticalMetrics()
+  const planColor = displayTask.planColor || defaultPlanColor()
 
   return {
-    transform: `translate(${left}px, ${rowTop + PLAN_BAR_TOP}px)`,
+    transform: `translate(${left}px, ${rowTop + planTop}px)`,
     width: `${width}px`,
     height: `${PLAN_BAR_HEIGHT}px`,
-    "--bar-color": planTaskColor(),
+    "--bar-color": planColor,
+    "--plan-color-fade": "10%",
+    "--plan-border-fade": "0%",
     "--progress-color": progressColor()
   }
 }
@@ -1406,8 +1623,9 @@ function beginLink(event: PointerEvent, task: GanttTask, sourceAnchor: LinkAncho
   selectedTaskId.value = task.id
   hideTaskDetails()
   const layout = layoutById.value.get(task.id)
+  const { planTop } = barVerticalMetrics()
   const start = layout
-    ? taskAnchorPoint(planLinkLayout(layout, task), sourceAnchor, mergedConfig.value.headerHeight, PLAN_BAR_TOP, PLAN_BAR_HEIGHT)
+    ? taskAnchorPoint(planLinkLayout(layout, task), sourceAnchor, mergedConfig.value.headerHeight, planTop, PLAN_BAR_HEIGHT)
     : {
         x: event.clientX - timeline.left + scrollLeft.value,
         y: event.clientY - timeline.top - mergedConfig.value.headerHeight + scrollTop.value
@@ -1647,12 +1865,12 @@ function defaultTaskColor(type: GanttTask["type"]) {
   return mergedConfig.value.taskColors?.task ?? "#2563eb"
 }
 
-function actualTaskColor(task: GanttTask) {
-  return task.color || defaultTaskColor(task.type)
+function defaultPlanColor() {
+  return mergedConfig.value.taskColors?.plan ?? "#cbd5e1"
 }
 
-function planTaskColor() {
-  return mergedConfig.value.taskColors?.plan ?? "#cbd5e1"
+function actualTaskColor(task: GanttTask) {
+  return task.color || defaultTaskColor(task.type)
 }
 
 function progressColor() {
@@ -2084,8 +2302,18 @@ function clampProgress(value: number) {
       </div>
     </div>
 
-    <div v-if="editorOpen" class="gantt-editor-backdrop gantt-task-drawer-backdrop" @click="closeEditor"></div>
-    <aside v-if="editorOpen" class="gantt-editor gantt-task-drawer" aria-label="任务编辑">
+    <template v-if="editorOpen">
+      <slot
+        name="task-editor"
+        :mode="editMode"
+        :draft="editDraft"
+        :fields="resolvedEditorFields"
+        :save="saveEditor"
+        :close="closeEditor"
+        :remove="deleteSelectedTask"
+      >
+    <div class="gantt-editor-backdrop gantt-task-drawer-backdrop" @click="closeEditor"></div>
+    <aside class="gantt-editor gantt-task-drawer" aria-label="任务编辑">
       <header>
         <div>
           <span>{{ editMode === "create" ? "创建" : "编辑" }}</span>
@@ -2094,83 +2322,103 @@ function clampProgress(value: number) {
         <button type="button" aria-label="关闭" @click="closeEditor">×</button>
       </header>
 
-      <label>
+      <label v-if="editorFieldVisible('name')">
         名称
-        <input v-model.trim="editDraft.name" type="text" maxlength="80">
+        <input v-model.trim="editDraft.name" type="text" maxlength="80" :readonly="!editorFieldEditable('name')">
       </label>
 
-      <label>
+      <label v-if="editorFieldVisible('type')">
         类型
-        <select v-model="editDraft.type">
-          <option value="task">任务</option>
-          <option value="summary">阶段</option>
-        </select>
+        <GanttSelect
+          :model-value="editDraft.type"
+          :options="taskTypeOptions"
+          :disabled="!editorFieldEditable('type')"
+          aria-label="任务类型"
+          @update:model-value="setTaskType"
+        />
       </label>
 
-      <label>
+      <label v-if="editorFieldVisible('parentId')">
         父级阶段
-        <select v-model="editDraft.parentId">
-          <option value="">无</option>
-          <option
-            v-for="summary in summaryOptions"
-            :key="summary.id"
-            :value="summary.id"
-            :disabled="summary.id === editDraft.id"
-          >
-            {{ summary.name }}
-          </option>
-        </select>
+        <GanttSelect
+          :model-value="editDraft.parentId"
+          :options="parentSelectOptions"
+          :disabled="!editorFieldEditable('parentId')"
+          aria-label="父级阶段"
+          @update:model-value="setParentId"
+        />
       </label>
 
       <div class="gantt-editor-grid">
-        <label>
+        <label v-if="editorFieldVisible('planStart')">
           计划开始
-          <input v-model="editDraft.planStart" type="date">
+          <GanttDatePicker
+            v-model="editDraft.planStart"
+            :readonly="!editorFieldEditable('planStart')"
+            aria-label="计划开始"
+          />
         </label>
-        <label>
+        <label v-if="editorFieldVisible('planEnd')">
           计划完成
-          <input v-model="editDraft.planEnd" type="date" :disabled="editDraft.type === 'milestone'">
+          <GanttDatePicker
+            v-model="editDraft.planEnd"
+            :disabled="editDraft.type === 'milestone'"
+            :readonly="!editorFieldEditable('planEnd')"
+            aria-label="计划完成"
+          />
         </label>
       </div>
 
       <div class="gantt-editor-grid">
-        <label>
+        <label v-if="editorFieldVisible('actualStart')">
           实际开始
-          <input v-model="editDraft.actualStart" type="date">
+          <GanttDatePicker
+            v-model="editDraft.actualStart"
+            :readonly="!editorFieldEditable('actualStart')"
+            aria-label="实际开始"
+          />
         </label>
-        <label>
+        <label v-if="editorFieldVisible('actualEnd')">
           实际完成
-          <input v-model="editDraft.actualEnd" type="date" :disabled="editDraft.type === 'milestone'">
+          <GanttDatePicker
+            v-model="editDraft.actualEnd"
+            :disabled="editDraft.type === 'milestone'"
+            :readonly="!editorFieldEditable('actualEnd')"
+            aria-label="实际完成"
+          />
         </label>
       </div>
 
-      <label>
+      <label v-if="editorFieldVisible('progress')">
         进度
-        <input v-model.number="editDraft.progress" type="number" min="0" max="100">
+        <input v-model.number="editDraft.progress" type="number" min="0" max="100" :readonly="!editorFieldEditable('progress')">
       </label>
 
-      <label>
+      <label v-if="editorFieldVisible('resources')">
         负责人
-        <input v-model="editDraft.resources" type="text" placeholder="多人请使用逗号分隔">
+        <input v-model="editDraft.resources" type="text" placeholder="多人请使用逗号分隔" :readonly="!editorFieldEditable('resources')">
       </label>
 
       <div class="gantt-editor-grid">
-        <label>
+        <label v-if="editorFieldVisible('duration')">
           工期
-          <input v-model.number="editDraft.duration" type="number" min="0">
+          <input v-model.number="editDraft.duration" type="number" min="0" :readonly="!editorFieldEditable('duration')">
         </label>
-        <label>
+        <label v-if="editorFieldVisible('calendarId')">
           日历 ID
-          <input v-model="editDraft.calendarId" type="text">
+          <input v-model="editDraft.calendarId" type="text" :readonly="!editorFieldEditable('calendarId')">
         </label>
       </div>
 
-      <label>
+      <label v-if="editorFieldVisible('schedulingMode')">
         排程方式
-        <select v-model="editDraft.schedulingMode">
-          <option value="auto">自动</option>
-          <option value="manual">手动</option>
-        </select>
+        <GanttSelect
+          :model-value="editDraft.schedulingMode"
+          :options="schedulingModeOptions"
+          :disabled="!editorFieldEditable('schedulingMode')"
+          aria-label="排程方式"
+          @update:model-value="setSchedulingMode"
+        />
       </label>
 
       <label
@@ -2179,19 +2427,20 @@ function clampProgress(value: number) {
         :class="{ 'gantt-editor-readonly': column.editable !== true }"
       >
         {{ column.label }}
-        <select
-          v-if="column.type === 'select'"
-          v-model="editDraft.custom[column.key]"
-          :disabled="column.editable !== true"
+        <slot
+          :name="`editor-field-${column.key}`"
+          :field="column"
+          :draft="editDraft"
+          :value="editDraft.custom[column.key]"
         >
-          <option
-            v-for="option in column.options ?? []"
-            :key="String(option.value)"
-            :value="option.value"
-          >
-            {{ option.label }}
-          </option>
-        </select>
+        <GanttSelect
+          v-if="column.type === 'select'"
+          :model-value="(editDraft.custom[column.key] as string | number) ?? ''"
+          :options="column.options ?? []"
+          :disabled="column.editable !== true"
+          :aria-label="column.label"
+          @update:model-value="setCustomEditorValue(column.key, $event)"
+        />
         <input
           v-else
           v-model="editDraft.custom[column.key]"
@@ -2199,23 +2448,101 @@ function clampProgress(value: number) {
           :placeholder="column.placeholder"
           :readonly="column.editable !== true"
         >
+        </slot>
       </label>
 
-      <label>
-        颜色
-        <input v-model="editDraft.color" type="color">
-      </label>
+      <div v-if="editorFieldVisible('color')" class="gantt-editor-field">
+        <span>实际条颜色</span>
+        <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('color') }">
+          <button
+            v-for="color in editorColorOptions"
+            :key="color"
+            type="button"
+            class="gantt-color-swatch"
+            :class="{ selected: editDraft.color.toLowerCase() === color }"
+            :style="{ '--swatch-color': color }"
+            :aria-label="`选择颜色 ${color}`"
+            :aria-pressed="editDraft.color.toLowerCase() === color"
+            :disabled="!editorFieldEditable('color')"
+            @click="editDraft.color = color"
+          >
+            <span>✓</span>
+          </button>
+          <label
+            class="gantt-color-custom"
+            :class="{ selected: !editorColorOptions.includes(editDraft.color.toLowerCase()) }"
+            aria-label="自定义颜色"
+          >
+            <input v-model="editDraft.color" type="color" :disabled="!editorFieldEditable('color')">
+          </label>
+        </div>
+      </div>
 
+      <div v-if="editorFieldVisible('planColor')" class="gantt-editor-field">
+        <span>计划条颜色</span>
+        <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('planColor') }">
+          <button
+            v-for="color in editorColorOptions"
+            :key="color"
+            type="button"
+            class="gantt-color-swatch"
+            :class="{ selected: editDraft.planColor.toLowerCase() === color }"
+            :style="{ '--swatch-color': color }"
+            :aria-label="`选择计划条颜色 ${color}`"
+            :aria-pressed="editDraft.planColor.toLowerCase() === color"
+            :disabled="!editorFieldEditable('planColor')"
+            @click="editDraft.planColor = color"
+          >
+            <span>✓</span>
+          </button>
+          <label
+            class="gantt-color-custom"
+            :class="{
+              selected: Boolean(editDraft.planColor)
+                && !editorColorOptions.includes(editDraft.planColor.toLowerCase())
+            }"
+            aria-label="自定义计划条颜色"
+          >
+            <input
+              type="color"
+              :value="editDraft.planColor || defaultPlanColor()"
+              :disabled="!editorFieldEditable('planColor')"
+              @input="editDraft.planColor = ($event.target as HTMLInputElement).value"
+            >
+          </label>
+        </div>
+      </div>
+
+      <slot
+        name="editor-footer"
+        :mode="editMode"
+        :draft="editDraft"
+        :save="saveEditor"
+        :close="closeEditor"
+        :remove="deleteSelectedTask"
+      >
       <footer>
         <button v-if="editMode === 'edit'" type="button" class="danger" @click="deleteSelectedTask">删除</button>
         <span></span>
         <button type="button" @click="closeEditor">取消</button>
         <button type="button" class="primary" @click="saveEditor">保存</button>
       </footer>
+      </slot>
     </aside>
+      </slot>
+    </template>
 
-    <div v-if="markerEditorOpen" class="gantt-editor-backdrop" @click="closeMarkerEditor"></div>
-    <aside v-if="markerEditorOpen" class="gantt-editor" aria-label="里程碑编辑">
+    <template v-if="markerEditorOpen">
+      <slot
+        name="marker-editor"
+        :mode="markerEditMode"
+        :draft="markerDraft"
+        :save="saveMarker"
+        :close="closeMarkerEditor"
+        :remove="deleteMarker"
+      >
+    <div class="gantt-editor-backdrop gantt-marker-editor-backdrop" @click="closeMarkerEditor"></div>
+    <aside class="gantt-editor gantt-marker-editor" aria-label="里程碑编辑">
       <header>
         <div>
           <span>{{ markerEditMode === "create" ? "创建" : "编辑" }}</span>
@@ -2231,13 +2558,34 @@ function clampProgress(value: number) {
 
       <label>
         日期
-        <input v-model="markerDraft.date" type="date">
+        <GanttDatePicker v-model="markerDraft.date" aria-label="里程碑日期" />
       </label>
 
-      <label>
-        颜色
-        <input v-model="markerDraft.color" type="color">
-      </label>
+      <div class="gantt-editor-field">
+        <span>颜色</span>
+        <div class="gantt-color-palette">
+          <button
+            v-for="color in editorColorOptions"
+            :key="color"
+            type="button"
+            class="gantt-color-swatch"
+            :class="{ selected: markerDraft.color.toLowerCase() === color }"
+            :style="{ '--swatch-color': color }"
+            :aria-label="`选择颜色 ${color}`"
+            :aria-pressed="markerDraft.color.toLowerCase() === color"
+            @click="markerDraft.color = color"
+          >
+            <span>✓</span>
+          </button>
+          <label
+            class="gantt-color-custom"
+            :class="{ selected: !editorColorOptions.includes(markerDraft.color.toLowerCase()) }"
+            aria-label="自定义颜色"
+          >
+            <input v-model="markerDraft.color" type="color">
+          </label>
+        </div>
+      </div>
 
       <footer>
         <button v-if="markerEditMode === 'edit'" type="button" class="danger" @click="deleteMarker">删除</button>
@@ -2246,6 +2594,8 @@ function clampProgress(value: number) {
         <button type="button" class="primary" @click="saveMarker">保存</button>
       </footer>
     </aside>
+      </slot>
+    </template>
 
     <div v-if="linkEditorOpen" class="gantt-editor-backdrop" @click="closeLinkEditor"></div>
     <aside v-if="linkEditorOpen" class="gantt-editor gantt-link-editor" aria-label="依赖关系编辑">
@@ -2265,12 +2615,12 @@ function clampProgress(value: number) {
 
       <label class="gantt-link-editor-type">
         依赖类型
-        <select v-model="linkEditDraft.type">
-          <option value="FS">FS · 完成-开始</option>
-          <option value="SS">SS · 开始-开始</option>
-          <option value="FF">FF · 完成-完成</option>
-          <option value="SF">SF · 开始-完成</option>
-        </select>
+        <GanttSelect
+          :model-value="linkEditDraft.type"
+          :options="linkTypeOptions"
+          aria-label="依赖类型"
+          @update:model-value="setLinkType"
+        />
       </label>
 
       <p class="gantt-link-editor-lock-hint">
@@ -2284,10 +2634,12 @@ function clampProgress(value: number) {
         </label>
         <label>
           间隔单位
-          <select v-model="linkEditDraft.lagUnit">
-            <option value="calendar">日历天</option>
-            <option value="working">工作日</option>
-          </select>
+          <GanttSelect
+            :model-value="linkEditDraft.lagUnit"
+            :options="lagUnitOptions"
+            aria-label="间隔单位"
+            @update:model-value="setLagUnit"
+          />
         </label>
       </div>
 

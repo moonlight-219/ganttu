@@ -867,6 +867,47 @@ describe("GanttChart", () => {
     expect(lockedActual.emitted("taskChange")).toBeUndefined()
   })
 
+  it("keeps plan and actual bar colors independent", () => {
+    const coloredTask: GanttTask = {
+      ...tasks[1],
+      parentId: null,
+      color: "#ef4444"
+    }
+    const defaultColors = mount(GanttChart, {
+      props: {
+        tasks: [coloredTask],
+        config: { viewMode: "day" }
+      }
+    })
+
+    expect(defaultColors.find(".gantt-bar.task").attributes("style")).toContain("--bar-color: #ef4444")
+    expect(defaultColors.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #cbd5e1")
+    expect(defaultColors.find(".gantt-plan-bar.task").attributes("style")).toContain("--plan-color-fade: 10%")
+
+    const taskPlanColor = mount(GanttChart, {
+      props: {
+        tasks: [{ ...coloredTask, planColor: "#10b981" }],
+        config: { viewMode: "day" }
+      }
+    })
+
+    expect(taskPlanColor.find(".gantt-bar.task").attributes("style")).toContain("--bar-color: #ef4444")
+    expect(taskPlanColor.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #10b981")
+
+    const configured = mount(GanttChart, {
+      props: {
+        tasks: [coloredTask],
+        config: {
+          viewMode: "day",
+          taskColors: { plan: "#94a3b8" }
+        }
+      }
+    })
+
+    expect(configured.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #94a3b8")
+    expect(configured.find(".gantt-plan-bar.task").attributes("style")).toContain("--plan-color-fade: 10%")
+  })
+
   it("keeps plan bars above actual bars and milestones pinned to the visible timeline body", async () => {
     const manyTasks: GanttTask[] = Array.from({ length: 30 }, (_, index) => ({
       id: `task-${index}`,
@@ -1169,11 +1210,14 @@ describe("GanttChart", () => {
     await wrapper.findAll(".gantt-actions button")[2].trigger("click")
     expect(wrapper.find(".gantt-task-drawer").exists()).toBe(false)
     expect(wrapper.find(".gantt-editor").exists()).toBe(true)
+    expect(wrapper.findAll(".gantt-color-swatch")).toHaveLength(8)
+    await wrapper.find(".gantt-color-swatch[aria-label='选择颜色 #10b981']").trigger("click")
     await wrapper.find(".gantt-editor button.primary").trigger("click")
 
     const created = wrapper.emitted("markerCreate")?.[0]?.[0] as GanttMarker
     expect(created.name).toBeTruthy()
     expect(created.date).toBeTruthy()
+    expect(created.color).toBe("#10b981")
     expect(wrapper.emitted("markerCreate")).toHaveLength(1)
     expect(onMarkerCreate).toHaveBeenCalledTimes(1)
   })
@@ -1241,6 +1285,41 @@ describe("GanttChart", () => {
     ])
   })
 
+  it("supports separate plan colors and custom date or select controls", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null }],
+        config: { viewMode: "day" }
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+    const drawer = wrapper.find(".gantt-task-drawer")
+    expect(drawer.find("input[type='date']").exists()).toBe(false)
+    expect(drawer.find("select").exists()).toBe(false)
+
+    await drawer.find(".gantt-date-trigger[aria-label='计划开始']").trigger("click")
+    expect(drawer.find(".gantt-date-popover").exists()).toBe(true)
+    await drawer.find(".gantt-date-days button[aria-label='2026-07-16']").trigger("click")
+
+    await drawer.find(".gantt-ui-select-trigger[aria-label='任务类型']").trigger("click")
+    const summaryOption = drawer.findAll(".gantt-ui-select-menu [role='option']")
+      .find((option) => option.text().includes("阶段"))
+    await summaryOption!.trigger("click")
+
+    await drawer.find(".gantt-color-swatch[aria-label='选择计划条颜色 #10b981']").trigger("click")
+    await drawer.find("button.primary").trigger("click")
+
+    expect(wrapper.emitted("taskChange")?.[0]).toMatchObject([
+      "task-1",
+      {
+        type: "summary",
+        planStart: "2026-07-16",
+        planColor: "#10b981"
+      }
+    ])
+  })
+
   it("opens the task editor by double-clicking either the plan or actual bar", async () => {
     const standaloneTask: GanttTask = {
       ...tasks[1],
@@ -1273,6 +1352,129 @@ describe("GanttChart", () => {
 
     await actualWrapper.find(".gantt-bar.task").trigger("dblclick")
     expect(actualWrapper.find(".gantt-task-drawer").exists()).toBe(true)
+  })
+
+  it("lets consumers disable the built-in task editor and handle edit requests externally", async () => {
+    const standaloneTask: GanttTask = {
+      ...tasks[1],
+      parentId: null,
+      custom: { budget: 12 }
+    }
+    const onTaskEditRequest = vi.fn()
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [standaloneTask],
+        config: {
+          viewMode: "day",
+          builtInTaskEditor: false,
+          columns: [
+            { key: "name", label: "任务名称", width: 180 },
+            {
+              key: "budget",
+              label: "预算",
+              width: 90,
+              editable: true,
+              editor: { editable: false, type: "number" }
+            }
+          ],
+          editorFields: [
+            { key: "remark", label: "备注", type: "text", editable: true }
+          ]
+        },
+        onTaskEditRequest
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+
+    expect(wrapper.find(".gantt-task-drawer").exists()).toBe(false)
+    expect(wrapper.emitted("taskEditRequest")).toHaveLength(1)
+    expect(onTaskEditRequest).toHaveBeenCalledTimes(1)
+    const request = onTaskEditRequest.mock.calls[0][0]
+    expect(request).toMatchObject({
+      mode: "edit",
+      taskType: "task",
+      task: { id: "task-1" },
+      draft: {
+        id: "task-1",
+        custom: { budget: 12 }
+      }
+    })
+    expect(request.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "name", label: "名称" }),
+      expect.objectContaining({ key: "budget", label: "预算", editable: false, type: "number" }),
+      expect.objectContaining({ key: "remark", label: "备注", editable: true, type: "text" })
+    ]))
+  })
+
+  it("supports replacing the built-in task and marker editors with slots or external handlers", async () => {
+    const onMarkerEditRequest = vi.fn()
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null }],
+        markers,
+        config: {
+          viewMode: "day",
+          builtInMarkerEditor: false
+        },
+        onMarkerEditRequest
+      },
+      slots: {
+        "task-editor": ({ draft }: { draft: { name: string } }) =>
+          h("section", { class: "custom-task-editor" }, draft.name)
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+    expect(wrapper.find(".custom-task-editor").text()).toBe("Child task")
+    expect(wrapper.find(".gantt-task-drawer").exists()).toBe(false)
+
+    await wrapper.find(".gantt-marker").trigger("dblclick")
+    expect(wrapper.find(".gantt-marker-editor").exists()).toBe(false)
+    expect(wrapper.emitted("markerEditRequest")).toHaveLength(1)
+    expect(onMarkerEditRequest).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "edit",
+      marker: expect.objectContaining({ id: "m1" })
+    }))
+  })
+
+  it("supports editor field configuration and per-field or footer slots", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{
+          ...tasks[1],
+          parentId: null,
+          custom: { budget: 12 }
+        }],
+        config: {
+          viewMode: "day",
+          columns: [
+            { key: "name", label: "任务名称" },
+            { key: "budget", label: "预算", type: "number", editable: true }
+          ],
+          editorFields: [
+            { key: "resources", label: "负责人", visible: false },
+            { key: "progress", label: "进度", editable: false }
+          ]
+        }
+      },
+      slots: {
+        "editor-field-budget": ({ value }: { value: unknown }) =>
+          h("output", { class: "custom-budget-editor" }, String(value)),
+        "editor-footer": () =>
+          h("footer", { class: "custom-editor-footer" }, "Custom actions")
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+
+    expect(wrapper.find(".custom-budget-editor").text()).toBe("12")
+    expect(wrapper.find(".custom-editor-footer").text()).toBe("Custom actions")
+    expect(wrapper.find(".gantt-task-drawer").text()).not.toContain("负责人")
+    const progressInput = wrapper.findAll(".gantt-task-drawer label")
+      .find((label) => label.text().includes("进度"))
+      ?.find("input")
+    expect(progressInput?.attributes("readonly")).toBeDefined()
   })
 
   it("supports configured columns, scoped cell slots, and custom editor values", async () => {
@@ -1409,6 +1611,22 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-chart").attributes("style")).toContain("height: 480px")
     expect(wrapper.find(".gantt-row").attributes("style")).toContain("height: 52px")
     expect(wrapper.find(".gantt-tick").attributes("style")).toContain("width: 42px")
+  })
+
+  it("keeps the plan top spacing equal to the actual bottom spacing for custom row heights", () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null }],
+        config: {
+          viewMode: "day",
+          rowHeight: 40
+        }
+      }
+    })
+
+    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 5px\)/)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 21px\)/)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("height: 14px")
   })
 })
 
