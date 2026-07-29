@@ -62,7 +62,7 @@ const viewOptions: Array<{ mode: ViewMode; label: string }> = [
 ]
 const PLAN_BAR_TOP = 7
 const PLAN_BAR_HEIGHT = 12
-const ACTUAL_BAR_TOP = 26
+const ACTUAL_BAR_TOP = 23
 const ACTUAL_BAR_HEIGHT = 14
 const collapsedIds = ref(new Set<string>())
 const selectedTaskId = ref<string | null>(null)
@@ -571,8 +571,11 @@ const builtinColumnKeys = new Set([
   "progress"
 ])
 
-const editableCustomColumns = computed(() => tableColumns.value.filter((column) =>
-  !builtinColumnKeys.has(column.key) && column.editable !== false
+const customEditorColumns = computed(() => tableColumns.value.filter((column) =>
+  !builtinColumnKeys.has(column.key)
+))
+const editableCustomColumns = computed(() => customEditorColumns.value.filter((column) =>
+  column.editable === true
 ))
 
 function columnValue(column: CustomColumn, task: GanttTask): unknown {
@@ -674,7 +677,7 @@ function openCreateEditor(type: GanttTask["type"]) {
     calendarId: "",
     duration: type === "milestone" ? 1 : 5,
     schedulingMode: "auto",
-    custom: Object.fromEntries(editableCustomColumns.value.map((column) => [column.key, ""]))
+    custom: Object.fromEntries(customEditorColumns.value.map((column) => [column.key, ""]))
   }
   editorOpen.value = true
 }
@@ -1945,6 +1948,18 @@ function clampProgress(value: number) {
 
           <div class="gantt-bars" :style="{ top: `${mergedConfig.headerHeight}px` }" @mouseleave="hideTaskDetails">
             <div
+              v-for="(flat, rowOffset) in visibleRows"
+              :key="`timeline-row-${flat.task.id}`"
+              class="gantt-timeline-row"
+              :class="{ selected: flat.task.id === selectedTaskId }"
+              :data-task-id="flat.task.id"
+              :style="{
+                height: `${mergedConfig.rowHeight}px`,
+                transform: `translateY(${(visibleWindow.start + rowOffset) * mergedConfig.rowHeight}px)`
+              }"
+              @click.stop="selectedTaskId = flat.task.id"
+            ></div>
+            <div
               v-if="mergedConfig.showPlanBar !== false"
               v-for="layout in renderedLayouts"
               :key="`plan-${layout.taskId}`"
@@ -1992,7 +2007,6 @@ function clampProgress(value: number) {
               :class="[
                 taskById.get(layout.taskId)?.type,
                 {
-                  selected: layout.taskId === selectedTaskId,
                   overdue: isOverdue(previewTask(taskById.get(layout.taskId)!)),
                   editable: mergedConfig.editable !== false && mergedConfig.editableActual !== false && taskById.get(layout.taskId)?.type !== 'summary',
                   locked: mergedConfig.editable === false || mergedConfig.editableActual === false || taskById.get(layout.taskId)?.type === 'summary'
@@ -2159,9 +2173,17 @@ function clampProgress(value: number) {
         </select>
       </label>
 
-      <label v-for="column in editableCustomColumns" :key="column.key">
+      <label
+        v-for="column in customEditorColumns"
+        :key="column.key"
+        :class="{ 'gantt-editor-readonly': column.editable !== true }"
+      >
         {{ column.label }}
-        <select v-if="column.type === 'select'" v-model="editDraft.custom[column.key]">
+        <select
+          v-if="column.type === 'select'"
+          v-model="editDraft.custom[column.key]"
+          :disabled="column.editable !== true"
+        >
           <option
             v-for="option in column.options ?? []"
             :key="String(option.value)"
@@ -2175,6 +2197,7 @@ function clampProgress(value: number) {
           v-model="editDraft.custom[column.key]"
           :type="customEditorInputType(column)"
           :placeholder="column.placeholder"
+          :readonly="column.editable !== true"
         >
       </label>
 

@@ -897,7 +897,7 @@ describe("GanttChart", () => {
     })
 
     expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 7px\)/)
-    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 26px\)/)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 23px\)/)
     const milestone = wrapper.find(".gantt-bar.milestone")
     expect(milestone.exists()).toBe(true)
     expect(milestone.attributes("style")).toMatch(/translate\([^,]+, 0px\)/)
@@ -1280,7 +1280,7 @@ describe("GanttChart", () => {
       ...tasks[1],
       parentId: null,
       resources: ["Alice"],
-      custom: { budget: 12 }
+      custom: { budget: 12, code: "LOCKED" }
     }]
     const wrapper = mount(GanttChart, {
       props: {
@@ -1289,7 +1289,8 @@ describe("GanttChart", () => {
           viewMode: "day",
           columns: [
             { key: "name", label: "工作项", width: 180, align: "left" },
-            { key: "budget", label: "预算", width: 90, type: "number", editable: true }
+            { key: "budget", label: "预算", width: 90, type: "number", editable: true },
+            { key: "code", label: "编号", width: 90, editable: false }
           ]
         }
       },
@@ -1300,7 +1301,8 @@ describe("GanttChart", () => {
 
     expect(wrapper.find(".gantt-table-head").text()).toContain("工作项")
     expect(wrapper.find(".gantt-table-head").text()).toContain("预算")
-    expect(wrapper.find(".gantt-table-head").attributes("style")).toContain("180px 90px")
+    expect(wrapper.find(".gantt-table-head").text()).toContain("编号")
+    expect(wrapper.find(".gantt-table-head").attributes("style")).toContain("180px 90px 90px")
     expect(wrapper.find(".budget-slot").text()).toBe("¥12")
 
     await wrapper.find(".gantt-row").trigger("dblclick")
@@ -1308,6 +1310,13 @@ describe("GanttChart", () => {
       .find((label) => label.text().includes("预算"))
       ?.find("input")
     expect(customInput?.exists()).toBe(true)
+    expect(customInput?.attributes("readonly")).toBeUndefined()
+    const readonlyInput = wrapper.findAll(".gantt-editor label")
+      .find((label) => label.text().includes("编号"))
+      ?.find("input")
+    expect(readonlyInput?.exists()).toBe(true)
+    expect(readonlyInput?.attributes("readonly")).toBeDefined()
+    expect(readonlyInput?.element.value).toBe("LOCKED")
     await customInput!.setValue("25")
     await wrapper.find(".gantt-editor button.primary").trigger("click")
 
@@ -1319,9 +1328,29 @@ describe("GanttChart", () => {
         actualStart: "2026-07-02",
         actualEnd: "2026-07-09",
         resources: ["Alice"],
-        custom: { budget: 25 }
+        custom: { budget: 25, code: "LOCKED" }
       }
     ])
+  })
+
+  it("keeps the selected task row highlighted across the table and timeline", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        config: { viewMode: "day" }
+      }
+    })
+
+    await wrapper.findAll(".gantt-row")[1].trigger("click")
+    expect(wrapper.findAll(".gantt-row")[1].classes()).toContain("selected")
+    expect(wrapper.find(".gantt-timeline-row[data-task-id='task-1']").classes()).toContain("selected")
+    expect(wrapper.find(".gantt-plan-bar.task").classes()).not.toContain("selected")
+    expect(wrapper.find(".gantt-bar.task").classes()).not.toContain("selected")
+
+    await wrapper.find(".gantt-timeline-row[data-task-id='summary']").trigger("click")
+    expect(wrapper.findAll(".gantt-row")[0].classes()).toContain("selected")
+    expect(wrapper.findAll(".gantt-row")[1].classes()).not.toContain("selected")
+    expect(wrapper.find(".gantt-timeline-row[data-task-id='summary']").classes()).toContain("selected")
   })
 
   it("updates overdue bar styling while the actual end is being dragged", async () => {

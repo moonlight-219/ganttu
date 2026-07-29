@@ -747,6 +747,21 @@ body.gantt-resizing {
   z-index: auto;
 }
 
+.gantt-timeline-row {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  left: 0;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.gantt-timeline-row.selected {
+  border-top: 1px solid rgba(37, 99, 235, 0.16);
+  border-bottom: 1px solid rgba(37, 99, 235, 0.16);
+  background: rgba(37, 99, 235, 0.09);
+}
+
 .gantt-plan-bar {
   position: absolute;
   z-index: 4;
@@ -868,14 +883,8 @@ body.gantt-resizing {
   transform-origin: center;
 }
 
-.gantt-bar.milestone.dragging .gantt-milestone-label,
-.gantt-bar.milestone.selected .gantt-milestone-label {
+.gantt-bar.milestone.dragging .gantt-milestone-label {
   border-color: color-mix(in srgb, var(--bar-color), white 10%);
-}
-
-.gantt-bar.selected:not(.milestone) {
-  outline: 2px solid #93c5fd;
-  outline-offset: 2px;
 }
 
 .gantt-bar.overdue:not(.milestone) {
@@ -896,11 +905,6 @@ body.gantt-resizing {
 .gantt-plan-bar.dragging .gantt-plan-resize {
   display: none !important;
   pointer-events: none;
-}
-
-.gantt-bar.milestone.selected .gantt-milestone-shape {
-  outline: 2px solid #93c5fd;
-  outline-offset: 3px;
 }
 
 .gantt-plan-progress {
