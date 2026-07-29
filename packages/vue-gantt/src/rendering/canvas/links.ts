@@ -40,11 +40,21 @@ export function buildOrthogonalLinkPath(
   const targetDirection = targetAnchor === "start" ? -1 : 1
   const exitX = start.x + sourceDirection * gap
   const entryX = end.x + targetDirection * gap
-  const midX = sourceDirection === targetDirection
-    ? sourceDirection === 1
-      ? Math.max(exitX, entryX) + gap
-      : Math.min(exitX, entryX) - gap
-    : (exitX + entryX) / 2
+  if (sourceDirection !== targetDirection) {
+    const corridorY = (start.y + end.y) / 2
+    return [
+      start,
+      { x: exitX, y: start.y },
+      { x: exitX, y: corridorY },
+      { x: entryX, y: corridorY },
+      { x: entryX, y: end.y },
+      end
+    ]
+  }
+
+  const midX = sourceDirection === 1
+    ? Math.max(exitX, entryX) + gap
+    : Math.min(exitX, entryX) - gap
 
   return [
     start,

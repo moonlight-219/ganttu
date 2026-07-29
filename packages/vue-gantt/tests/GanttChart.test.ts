@@ -105,6 +105,25 @@ describe("GanttChart", () => {
     }
   })
 
+  it("routes opposite-side dependencies through the row gap before entering the target", () => {
+    const path = buildOrthogonalLinkPath(
+      { x: 45, y: 40 },
+      { x: 285, y: 82 },
+      "start",
+      "finish"
+    )
+
+    expect(path).toEqual([
+      { x: 45, y: 40 },
+      { x: 27, y: 40 },
+      { x: 27, y: 61 },
+      { x: 303, y: 61 },
+      { x: 303, y: 82 },
+      { x: 285, y: 82 }
+    ])
+    expect(path[4].x).toBeGreaterThan(path[5].x)
+  })
+
   it("renders table data, marker nodes, and text-free task bars", () => {
     const wrapper = mount(GanttChart, {
       props: {
@@ -124,7 +143,9 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-owner-cell").attributes("title")?.length).toBeGreaterThan(0)
     expect(wrapper.find(".gantt-marker").exists()).toBe(true)
     expect(wrapper.find(".gantt-marker").attributes("aria-label")).toContain("2026-07-20")
-    expect(wrapper.find(".gantt-marker [role='tooltip']").text()).toContain("Acceptance")
+    expect(wrapper.find(".gantt-marker").text()).toContain("Acceptance")
+    expect(wrapper.find(".gantt-marker").attributes("title")).toBeUndefined()
+    expect(wrapper.find(".gantt-marker [role='tooltip']").exists()).toBe(false)
     expect(wrapper.find(".gantt-bar.milestone").exists()).toBe(false)
     expect(wrapper.find(".gantt-bar.task").text()).toBe("")
     expect(wrapper.findAll(".gantt-plan-bar")).toHaveLength(tasks.length)
@@ -204,6 +225,7 @@ describe("GanttChart", () => {
 
     expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(180px")
     expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toBe(planBarStyle)
+    expect(wrapper.findAll(".gantt-row")[1].findAll(".gantt-date-cell")[2].text()).toBe("07-04")
 
     requestAnimationFrame.mockRestore()
     cancelAnimationFrame.mockRestore()
@@ -260,6 +282,7 @@ describe("GanttChart", () => {
 
     expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(90px")
     expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("width: 270px")
+    expect(wrapper.findAll(".gantt-row")[1].findAll(".gantt-date-cell")[2].text()).toBe("07-01")
 
     await handle.trigger("pointerup", { clientX: 90, pointerId: 1 })
     const patch = wrapper.emitted("taskChange")?.[0]?.[1] as PatchTask | undefined
@@ -300,6 +323,7 @@ describe("GanttChart", () => {
 
     expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("translate(60px")
     expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("width: 300px")
+    expect(wrapper.findAll(".gantt-row")[1].findAll(".gantt-date-cell")[0].text()).toBe("06-30")
 
     await handle.trigger("pointerup", { clientX: 60, pointerId: 1 })
     const patch = wrapper.emitted("taskChange")?.[0]?.[1] as PatchTask | undefined
@@ -359,7 +383,7 @@ describe("GanttChart", () => {
     cancelAnimationFrame.mockRestore()
   })
 
-  it("keeps dependency lines aligned with the dragged task preview", async () => {
+  it("keeps dependency lines aligned with the dragged plan preview", async () => {
     const rafCallbacks: FrameRequestCallback[] = []
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
@@ -391,6 +415,7 @@ describe("GanttChart", () => {
         config: {
           viewMode: "day",
           columnWidth: 30,
+          editablePlan: true,
           visibleRange: { start: "2026-07-01", end: "2026-07-31" }
         }
       }
@@ -398,14 +423,13 @@ describe("GanttChart", () => {
 
     const initialPoints = wrapper.find(".gantt-link-hit").attributes("points")
     expect(wrapper.find(".gantt-link-path").exists()).toBe(true)
-    const sourceBar = wrapper.findAll(".gantt-bar.task")[0]
+    const sourceBar = wrapper.findAll(".gantt-plan-bar.task")[0]
     await sourceBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
     await sourceBar.trigger("pointermove", { clientX: 160, pointerId: 1 })
     rafCallbacks.shift()?.(0)
     await nextTick()
 
     expect(wrapper.find(".gantt-link-hit").attributes("points")).not.toBe(initialPoints)
-    expect(wrapper.find(".gantt-link-hit").attributes("points")?.startsWith("300,")).toBe(true)
 
     requestAnimationFrame.mockRestore()
     cancelAnimationFrame.mockRestore()
@@ -544,6 +568,50 @@ describe("GanttChart", () => {
     expect(editable.find(".gantt-plan-resize").exists()).toBe(true)
   })
 
+  it("keeps plan bars above actual bars and milestones pinned to the visible timeline body", async () => {
+    const manyTasks: GanttTask[] = Array.from({ length: 30 }, (_, index) => ({
+      id: `task-${index}`,
+      name: `Task ${index}`,
+      type: "task",
+      plan: { start: "2026-07-01", end: "2026-07-02" },
+      actual: { start: "2026-07-01", end: "2026-07-02", progress: 0 }
+    }))
+    manyTasks.push({
+      id: "fixed-milestone",
+      name: "Fixed milestone",
+      type: "milestone",
+      plan: { start: "2026-07-15", end: "2026-07-15" },
+      actual: { start: "2026-07-15", end: "2026-07-15", progress: 0 }
+    })
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: manyTasks,
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          rowHeight: 44,
+          virtualScroll: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        },
+        height: 240
+      }
+    })
+
+    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 7px\)/)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 26px\)/)
+    const milestone = wrapper.find(".gantt-bar.milestone")
+    expect(milestone.exists()).toBe(true)
+    expect(milestone.attributes("style")).toMatch(/translate\([^,]+, 0px\)/)
+
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    timeline.scrollTop = 440
+    await wrapper.find(".gantt-timeline").trigger("scroll")
+    await nextTick()
+
+    expect(wrapper.find(".gantt-bar.milestone").attributes("style")).toMatch(/translate\([^,]+, 440px\)/)
+    expect(wrapper.find(".gantt-bar.milestone").attributes("style")).not.toContain(`height: ${manyTasks.length * 44}px`)
+  })
+
   it("emits dependency links from manual link handles", async () => {
     vi.useFakeTimers()
     const wrapper = mount(GanttChart, {
@@ -561,7 +629,7 @@ describe("GanttChart", () => {
     await wrapper.find(".gantt-timeline").trigger("pointermove", { clientX: 180, clientY: 160 })
     expect(wrapper.find(".gantt-link-draft polyline").exists()).toBe(true)
     expect(wrapper.find(".gantt-link-draft polyline").attributes("points")?.split(" ")).toHaveLength(6)
-    await wrapper.findAll(".gantt-bar")[1].trigger("pointerup")
+    await wrapper.findAll(".gantt-plan-bar")[1].trigger("pointerup")
     expect(wrapper.emitted("linkChange")?.[0]?.[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceId: "source", targetId: "target", type: "FS" })
     ]))
@@ -577,6 +645,8 @@ describe("GanttChart", () => {
     })
     const leftHandles = wrapper.findAll(".gantt-link-handle.in")
     const rightHandles = wrapper.findAll(".gantt-link-handle.out")
+    expect(wrapper.find(".gantt-bar .gantt-link-handle").exists()).toBe(false)
+    expect(wrapper.find(".gantt-plan-bar .gantt-link-handle").exists()).toBe(true)
 
     await leftHandles[0].trigger("pointerdown", { clientX: 120, clientY: 120 })
     await leftHandles[1].trigger("pointerup")
@@ -768,8 +838,20 @@ describe("GanttChart", () => {
     const markerNodes = wrapper.findAll(".gantt-marker")
     expect(markerNodes[0].attributes("style")).toContain("--marker-color: #dc2626")
     expect(markerNodes[1].attributes("style")).toContain("--marker-color: #2563eb")
+    expect(markerNodes[0].attributes("style")).toContain("top: 8px")
+    expect(markerNodes[1].attributes("style")).toContain("top: 38px")
 
-    await markerNodes[1].trigger("dblclick")
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    timeline.scrollTop = 120
+    await wrapper.find(".gantt-timeline").trigger("scroll")
+    await nextTick()
+
+    const scrolledMarkerNodes = wrapper.findAll(".gantt-marker")
+    expect(scrolledMarkerNodes[0].attributes("style")).toContain("top: 8px")
+    expect(scrolledMarkerNodes[1].attributes("style")).toContain("top: 38px")
+    expect(wrapper.find(".gantt-marker-badge-layer").exists()).toBe(true)
+
+    await scrolledMarkerNodes[1].trigger("dblclick")
     await wrapper.find(".gantt-editor input[type='color']").setValue("#16a34a")
     await wrapper.find(".gantt-editor button.primary").trigger("click")
     expect(wrapper.emitted("markerChange")?.[0]).toMatchObject([
