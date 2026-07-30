@@ -133,6 +133,7 @@ import GanttChart, {
 
 const containerCode = `<template>
   <div id="GanttChartDIV" class="gantt-doc-demo">
+    <!-- tasks 必填；links、markers、config、height 均为可选 -->
     <GanttChart
       :tasks="tasks"
       :links="links"
@@ -146,6 +147,7 @@ const containerCode = `<template>
 </template>`
 
 const configCode = `const ganttConfig: Partial<GanttConfig> = {
+  // 以下配置均为可选；不传时会使用组件默认值
   // 甘特图基础设置
   viewMode: "day",                 // 时间刻度: day / week / month / quarter / year
   width: "100%",                   // 甘特图整体宽度
@@ -200,18 +202,18 @@ const configCode = `const ganttConfig: Partial<GanttConfig> = {
 
 const dataCode = `const tasks = ref<GanttTask[]>([
   {
-    id: "phase-1",
-    name: "一期交付",
-    type: "summary",
-    plan: { start: "2026-07-01", end: "2026-07-16" },
-    actual: { start: "2026-07-01", end: "2026-07-18", progress: 48 },
-    color: "#64748b",
-    planColor: "#cbd5e1",
-    custom: { priority: "high", owner: "项目组" }
+    id: "phase-1",                                      // 必填：唯一 ID
+    name: "一期交付",                                   // 必填：名称
+    type: "summary",                                    // 必填：task / summary / milestone
+    plan: { start: "2026-07-01", end: "2026-07-16" },   // 必填：计划时间
+    actual: { start: "2026-07-01", end: "2026-07-18", progress: 48 }, // 必填：实际时间和进度
+    color: "#64748b",                                   // 可选：实际条颜色
+    planColor: "#cbd5e1",                               // 可选：计划条颜色
+    custom: { priority: "high", owner: "项目组" }        // 可选：业务自定义字段
   },
   {
     id: "task-1",
-    parentId: "phase-1",
+    parentId: "phase-1",                                // 可选：父级阶段 ID
     name: "需求确认",
     type: "task",
     plan: { start: "2026-07-01", end: "2026-07-05" },
@@ -237,17 +239,18 @@ const dataCode = `const tasks = ref<GanttTask[]>([
 
 const links = ref<GanttLink[]>([
   {
-    id: "task-1-task-2",
-    sourceId: "task-1",
-    targetId: "task-2",
-    type: "FS",
-    lag: 0,
-    lagUnit: "calendar"
+    id: "task-1-task-2",  // 必填：依赖 ID
+    sourceId: "task-1",   // 必填：前置任务
+    targetId: "task-2",   // 必填：后置任务
+    type: "FS",           // 必填：FS / SS / FF / SF
+    lag: 0,               // 可选：间隔天数
+    lagUnit: "calendar"   // 可选：calendar / working
   }
 ])
 
 const markers = ref<GanttMarker[]>([
   { id: "review", name: "方案评审", date: "2026-07-10", color: "#d97706" }
+  // id/name/date 必填，color 可选
 ])`
 
 const createCode = `<script setup lang="ts">
@@ -375,9 +378,25 @@ const taskRows = [
   ["planColor", "string", "否", "计划条颜色。"],
   ["calendarId", "string", "否", "任务日历 ID。"],
   ["resources", "string[]", "否", "负责人列表。"],
+  ["segments", "Array<{ start; end }>", "否", "预留的分段任务字段，当前视图暂未拆段渲染。"],
+  ["constraint", "{ type; date? }", "否", "任务约束，Core 排程影响分析中会用于冲突判断。"],
   ["duration", "number", "否", "任务工期。"],
   ["schedulingMode", "auto | manual", "否", "排程方式。"],
   ["custom", "Record<string, unknown>", "否", "业务自定义字段。"]
+]
+
+const dateRangeRows = [
+  ["start", "string | Date", "是", "开始日期。"],
+  ["end", "string | Date", "是", "结束日期。"],
+  ["progress", "number", "plan 否 / actual 是", "进度，actual 中必须提供。"]
+]
+
+const dependencyRows = [
+  ["id", "string", "否", "依赖 ID，不传时会自动组合生成。"],
+  ["predecessorId", "string", "是", "前置任务 ID，用于任务自身 dependencies 字段。"],
+  ["type", "FS | SS | FF | SF", "是", "依赖类型。"],
+  ["lag", "number", "是", "间隔天数。"],
+  ["lagUnit", "calendar | working", "是", "间隔单位。"]
 ]
 
 const linkRows = [
@@ -418,6 +437,11 @@ const editorFieldRows = [
   ["placeholder", "string", "否", "输入提示。"]
 ]
 
+const constraintRows = [
+  ["type", "SNET | SNLT | MSO | MFO | ASAP | ALAP", "是", "约束类型。"],
+  ["date", "string | Date", "否", "约束日期，部分约束类型需要。"]
+]
+
 const eventRows = [
   ["task-change", "(id, patch)", "拖拽、拉伸、保存任务时触发。"],
   ["task-create", "(task)", "创建任务时触发。"],
@@ -444,6 +468,27 @@ const patchRows = [
   ["custom", "Record<string, unknown>", "自定义字段编辑保存时返回。"]
 ]
 
+const editRequestRows = [
+  ["mode", "create | edit", "编辑模式。"],
+  ["task", "GanttTask | undefined", "编辑已有任务时存在，创建时为空。"],
+  ["taskType", "task | summary | milestone", "当前任务类型。"],
+  ["draft", "GanttTaskEditorDraft", "内置编辑器使用的草稿数据。"],
+  ["fields", "GanttEditorField[]", "本次可渲染的编辑字段。"]
+]
+
+const markerRequestRows = [
+  ["mode", "create | edit", "编辑模式。"],
+  ["marker", "GanttMarker | undefined", "编辑已有里程碑时存在，创建时为空。"],
+  ["draft", "GanttMarkerEditorDraft", "内置里程碑编辑器使用的草稿数据。"]
+]
+
+const linkRejectionRows = [
+  ["reason", "duplicate | cycle | self", "拒绝原因：重复、循环依赖或自连。"],
+  ["sourceId", "string", "前置任务 ID。"],
+  ["targetId", "string", "后置任务 ID。"],
+  ["message", "string", "可直接展示给用户的提示文案。"]
+]
+
 const slotRows = [
   ["cell-{key}", "{ task, column, value, rowIndex }", "自定义左侧表格单元格。"],
   ["cell", "{ task, column, value, rowIndex }", "统一自定义左侧表格单元格。"],
@@ -468,14 +513,15 @@ const exportOptionRows = [
 ]
 
 const coreRows = [
-  ["computeTimeScale", "生成时间轴刻度。"],
-  ["computeLayout", "计算任务条在时间轴中的位置。"],
-  ["flattenTasks", "展开阶段树，生成可渲染行。"],
-  ["normalizeLinks", "标准化依赖，过滤重复、自连和循环关系。"],
-  ["checkCyclicDependency", "检测依赖是否产生循环。"],
-  ["scheduleByDependencies", "按 FS / SS / FF / SF 依赖进行排程。"],
-  ["computeImpact", "计算一次任务变更影响到的后续任务。"],
-  ["addDays / toDate / formatDate", "日期工具方法。"]
+  ["computeTimeScale(start, end, viewMode, columnWidth, firstDayOfWeek)", "生成时间轴刻度。"],
+  ["computeLayout(tasks, links, config, collapsedIds?, viewport?)", "计算任务条在时间轴中的位置，返回 Result<TaskLayout[]>。"],
+  ["flattenTasks(tasks, collapsedIds?)", "展开阶段树，生成可渲染行，支持父子孙多级结构。"],
+  ["normalizeLinks(tasks, standaloneLinks?)", "标准化依赖，合并 task.dependencies 和 links，并过滤无效关系。"],
+  ["checkCyclicDependency(links)", "检测依赖是否产生循环。"],
+  ["scheduleByDependencies(tasks, links)", "按 FS / SS / FF / SF 依赖进行排程，返回 Result<GanttTask[]>。"],
+  ["computeImpact(taskId, patch, tasks, links, config)", "计算一次任务变更影响到的后续任务和约束冲突。"],
+  ["shiftTask(task, start)", "按新开始日期整体平移任务实际时间。"],
+  ["toDate / formatDate / addDays / diffDays / inclusiveDays / isValidDate", "日期工具方法。"]
 ]
 
 async function copyCode(key: string, value: string) {
@@ -609,6 +655,10 @@ function closeMobileNav() {
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
           </div>
         </div>
+        <p class="doc-hint">
+          说明：<code>columns</code> 会完整替换左侧表格列；<code>customColumns</code> 会在内置列后追加列。
+          自定义列如果需要进入任务编辑抽屉，请设置 <code>editable: true</code>，并按需要补充 <code>type</code>、<code>options</code> 或 <code>editor</code>。
+        </p>
         <h2>CustomColumn 字段说明</h2>
         <div class="doc-table four-cols">
           <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>
@@ -639,7 +689,25 @@ function closeMobileNav() {
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
           </div>
         </div>
-        <h2>依赖字段说明</h2>
+        <h2>DateRange 字段说明</h2>
+        <div class="doc-table four-cols">
+          <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>
+          <div v-for="row in dateRangeRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
+          </div>
+        </div>
+        <h2>Dependency 字段说明</h2>
+        <p class="doc-hint">
+          <code>Dependency</code> 用在 <code>task.dependencies</code> 中；<code>GanttLink</code> 用在组件的 <code>links</code> 属性中。
+          两者会在内部统一标准化为依赖线。
+        </p>
+        <div class="doc-table four-cols">
+          <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>
+          <div v-for="row in dependencyRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
+          </div>
+        </div>
+        <h2>GanttLink 字段说明</h2>
         <div class="doc-table four-cols">
           <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>
           <div v-for="row in linkRows" :key="row[0]" class="table-row">
@@ -650,6 +718,13 @@ function closeMobileNav() {
         <div class="doc-table four-cols">
           <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>
           <div v-for="row in markerRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
+          </div>
+        </div>
+        <h2>Constraint 字段说明</h2>
+        <div class="doc-table four-cols">
+          <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>
+          <div v-for="row in constraintRows" :key="row[0]" class="table-row">
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
           </div>
         </div>
@@ -694,6 +769,27 @@ function closeMobileNav() {
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
           </div>
         </div>
+        <h2>外部任务编辑请求 GanttTaskEditRequest</h2>
+        <div class="doc-table three-cols">
+          <div class="table-head"><span>字段</span><span>类型</span><span>说明</span></div>
+          <div v-for="row in editRequestRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
+          </div>
+        </div>
+        <h2>外部里程碑编辑请求 GanttMarkerEditRequest</h2>
+        <div class="doc-table three-cols">
+          <div class="table-head"><span>字段</span><span>类型</span><span>说明</span></div>
+          <div v-for="row in markerRequestRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
+          </div>
+        </div>
+        <h2>依赖拒绝信息 GanttLinkRejection</h2>
+        <div class="doc-table three-cols">
+          <div class="table-head"><span>字段</span><span>类型</span><span>说明</span></div>
+          <div v-for="row in linkRejectionRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
+          </div>
+        </div>
       </section>
 
       <section id="slots" class="doc-section">
@@ -720,6 +816,9 @@ function closeMobileNav() {
       <section id="methods" class="doc-section">
         <h1>1.10. 甘特图组件方法</h1>
         <p>通过组件 ref 可以调用公开方法。导出图片会返回 data URL，默认同时触发下载。</p>
+        <p class="doc-hint">
+          当前 <code>exportImage</code> 导出的是当前可视区域，适合大数据场景下快速保存当前视图；如果需要导出全部行，建议业务侧做分页或分片导出。
+        </p>
         <div class="doc-table three-cols">
           <div class="table-head"><span>方法</span><span>返回值</span><span>说明</span></div>
           <div v-for="row in methodRows" :key="row[0]" class="table-row">

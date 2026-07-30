@@ -178,6 +178,17 @@ li code {
   font-size: 13px;
 }
 
+.doc-hint {
+  margin: 10px 0 18px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--doc-blue);
+  border-radius: 3px;
+  background: #eff6ff;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
 .code-block {
   position: relative;
   margin: 14px 0 22px;
