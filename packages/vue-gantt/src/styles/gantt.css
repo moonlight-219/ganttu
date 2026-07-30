@@ -1,4 +1,4 @@
-.gantt-chart {
+﻿.gantt-chart {
   --gantt-border: #d7dde8;
   --gantt-grid: #e6ebf3;
   --gantt-cell-border: #f1f4f7;
@@ -17,6 +17,13 @@
   background: #ffffff;
   color: var(--gantt-text);
   font-family: Inter, "Segoe UI", Arial, "Microsoft YaHei", sans-serif;
+}
+
+.gantt-chart:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  border: 0;
+  border-radius: 0;
 }
 
 .gantt-link-notice {
@@ -536,6 +543,10 @@
 body.gantt-resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+body.gantt-dialog-open {
+  overflow: hidden;
 }
 
 .gantt-timeline {
@@ -1296,7 +1307,7 @@ body.gantt-resizing {
 }
 
 .gantt-editor-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 20;
   background: rgba(15, 23, 42, 0.38);
@@ -1304,7 +1315,7 @@ body.gantt-resizing {
 }
 
 .gantt-editor {
-  position: absolute;
+  position: fixed;
   z-index: 21;
   top: 50%;
   left: 50%;
@@ -1313,6 +1324,7 @@ body.gantt-resizing {
   max-height: calc(100% - 32px);
   gap: 16px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 0;
   border: 1px solid rgba(203, 213, 225, 0.74);
   border-top: 3px solid #3b82f6;
@@ -1340,18 +1352,6 @@ body.gantt-resizing {
   animation: gantt-drawer-enter 180ms ease-out;
 }
 
-.gantt-task-drawer header {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-}
-
-.gantt-task-drawer footer {
-  position: sticky;
-  z-index: 2;
-  bottom: 0;
-}
-
 @keyframes gantt-drawer-enter {
   from {
     opacity: 0;
@@ -1375,6 +1375,9 @@ body.gantt-resizing {
   padding: 21px 24px 8px;
   border-bottom: 0;
   background: #ffffff;
+  position: sticky;
+  z-index: 60;
+  top: 0;
 }
 
 .gantt-editor header div {
@@ -1553,7 +1556,7 @@ body.gantt-resizing {
 .gantt-ui-select-menu,
 .gantt-date-popover {
   position: absolute;
-  z-index: 40;
+  z-index: 90;
   top: calc(100% + 7px);
   left: 0;
   width: 100%;
@@ -1612,8 +1615,8 @@ body.gantt-resizing {
   left: auto;
 }
 
-.gantt-editor .gantt-date-popover header,
-.gantt-editor .gantt-date-popover footer {
+.gantt-date-popover header,
+.gantt-date-popover footer {
   position: static;
   display: flex;
   padding: 0;
@@ -1621,13 +1624,13 @@ body.gantt-resizing {
   background: transparent;
 }
 
-.gantt-editor .gantt-date-popover header {
+.gantt-date-popover header {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
 }
 
-.gantt-editor .gantt-date-popover header strong {
+.gantt-date-popover header strong {
   color: #1e293b;
   font-size: 14px;
 }
@@ -1637,7 +1640,7 @@ body.gantt-resizing {
   gap: 4px;
 }
 
-.gantt-editor .gantt-date-popover header button {
+.gantt-date-popover header button {
   width: 30px;
   min-width: 30px;
   height: 30px;
@@ -1649,7 +1652,7 @@ body.gantt-resizing {
   font-size: 22px;
 }
 
-.gantt-editor .gantt-date-popover header button:hover {
+.gantt-date-popover header button:hover {
   background: #f1f5f9;
   color: #2563eb;
 }
@@ -1673,7 +1676,7 @@ body.gantt-resizing {
   font-size: 11px;
 }
 
-.gantt-editor .gantt-date-days button {
+.gantt-date-days button {
   width: 34px;
   min-width: 34px;
   height: 32px;
@@ -1687,34 +1690,34 @@ body.gantt-resizing {
   font-weight: 600;
 }
 
-.gantt-editor .gantt-date-days button:hover {
+.gantt-date-days button:hover {
   background: #eff6ff;
   color: #2563eb;
 }
 
-.gantt-editor .gantt-date-days button.muted {
+.gantt-date-days button.muted {
   color: #cbd5e1;
 }
 
-.gantt-editor .gantt-date-days button.today {
+.gantt-date-days button.today {
   box-shadow: inset 0 0 0 1px #93c5fd;
   color: #2563eb;
 }
 
-.gantt-editor .gantt-date-days button.selected {
+.gantt-date-days button.selected {
   background: #2563eb;
   box-shadow: 0 5px 12px rgba(37, 99, 235, 0.24);
   color: #ffffff;
 }
 
-.gantt-editor .gantt-date-popover footer {
+.gantt-date-popover footer {
   justify-content: space-between;
   margin-top: 9px;
   border-top: 1px solid #eef2f7;
   padding-top: 9px;
 }
 
-.gantt-editor .gantt-date-popover footer button {
+.gantt-date-popover footer button {
   min-width: 0;
   height: 30px;
   padding: 0 8px;
@@ -1741,6 +1744,9 @@ body.gantt-resizing {
   padding: 8px 24px 22px;
   border-top: 0;
   background: #ffffff;
+  position: sticky;
+  z-index: 60;
+  bottom: 0;
 }
 
 .gantt-editor footer span {
@@ -2036,3 +2042,4 @@ body.gantt-resizing {
     grid-template-columns: 190px 64px 56px repeat(4, 68px) 98px;
   }
 }
+

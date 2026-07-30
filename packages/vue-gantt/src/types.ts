@@ -50,3 +50,18 @@ export interface GanttLinkRejection {
   targetId: string
   message: string
 }
+
+export interface GanttExportImageOptions {
+  filename?: string
+  type?: "image/png" | "image/jpeg"
+  background?: string
+  pixelRatio?: number
+  download?: boolean
+}
+
+export interface GanttChartExpose {
+  exportImage: (options?: GanttExportImageOptions) => Promise<string>
+  enterFullscreen: () => Promise<void>
+  exitFullscreen: () => Promise<void>
+  toggleFullscreen: () => Promise<void>
+}

@@ -1,7 +1,9 @@
 import "./styles/gantt.css"
 import GanttChart from "./components/GanttChart.vue"
+import GanttDialog from "./components/GanttDialog.vue"
 
 export { GanttChart }
+export { GanttDialog }
 export default GanttChart
 export type {
   CustomColumn,
@@ -14,6 +16,8 @@ export type {
   ViewMode
 } from "@gantt/core"
 export type {
+  GanttChartExpose,
+  GanttExportImageOptions,
   GanttLinkRejection,
   GanttMarkerEditRequest,
   GanttMarkerEditorDraft,

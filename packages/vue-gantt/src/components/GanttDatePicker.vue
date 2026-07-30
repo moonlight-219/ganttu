@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -17,9 +17,14 @@ const emit = defineEmits<{
 }>()
 
 const root = ref<HTMLElement | null>(null)
+const popover = ref<HTMLElement | null>(null)
 const open = ref(false)
+const placement = ref<"bottom" | "top">("bottom")
+const popoverStyle = ref<Record<string, string>>({})
 const viewDate = ref(parseDate(props.modelValue) ?? new Date())
 const weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+const popoverHeight = 360
+const disableTeleport = typeof navigator !== "undefined" && navigator.userAgent.includes("jsdom")
 
 function parseDate(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
@@ -62,11 +67,15 @@ watch(() => props.modelValue, (value) => {
   if (parsed) viewDate.value = parsed
 })
 
-function toggle() {
+async function toggle() {
   if (props.disabled || props.readonly) return
   const selected = parseDate(props.modelValue)
   if (selected) viewDate.value = selected
   open.value = !open.value
+  if (open.value) {
+    await nextTick()
+    updatePlacement()
+  }
 }
 
 function moveMonth(delta: number) {
@@ -88,25 +97,65 @@ function clear() {
 }
 
 function onDocumentPointerDown(event: PointerEvent) {
-  if (!root.value?.contains(event.target as Node)) open.value = false
+  const target = event.target as Node
+  if (!root.value?.contains(target) && !popover.value?.contains(target)) open.value = false
 }
 
 function onDocumentKeyDown(event: KeyboardEvent) {
   if (event.key === "Escape") open.value = false
 }
 
+function onDocumentScroll(event: Event) {
+  if (!open.value) return
+  const target = event.target as Node | null
+  if (target && popover.value?.contains(target)) return
+  open.value = false
+}
+
+function onWindowResize() {
+  if (open.value) open.value = false
+}
+
+function updatePlacement() {
+  const rect = root.value?.getBoundingClientRect()
+  if (!rect) return
+
+  const gap = 7
+  const popoverWidth = Math.min(300, Math.max(260, window.innerWidth - 16))
+  const bottomLimit = window.innerHeight
+  const topLimit = 0
+  const below = bottomLimit - rect.bottom
+  const above = rect.top - topLimit
+  const nextPlacement = below < popoverHeight && above > below ? "top" : "bottom"
+  const top = nextPlacement === "top"
+    ? Math.max(8, rect.top - popoverHeight - gap)
+    : Math.min(rect.bottom + gap, window.innerHeight - popoverHeight - 8)
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - popoverWidth - 8))
+  placement.value = nextPlacement
+  popoverStyle.value = {
+    position: "fixed",
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${popoverWidth}px`
+  }
+}
+
 onMounted(() => {
   document.addEventListener("pointerdown", onDocumentPointerDown)
   document.addEventListener("keydown", onDocumentKeyDown)
+  window.addEventListener("resize", onWindowResize)
+  document.addEventListener("scroll", onDocumentScroll, true)
 })
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocumentPointerDown)
   document.removeEventListener("keydown", onDocumentKeyDown)
+  window.removeEventListener("resize", onWindowResize)
+  document.removeEventListener("scroll", onDocumentScroll, true)
 })
 </script>
 
 <template>
-  <div ref="root" class="gantt-date-picker" :class="{ open, disabled: disabled || readonly }">
+  <div ref="root" class="gantt-date-picker" :class="[{ open, disabled: disabled || readonly }, `placement-${placement}`]">
     <button
       type="button"
       class="gantt-date-trigger"
@@ -119,38 +168,47 @@ onBeforeUnmount(() => {
       <span>{{ displayValue || "请选择日期" }}</span>
       <i></i>
     </button>
-    <div v-if="open" class="gantt-date-popover" role="dialog" :aria-label="ariaLabel">
-      <header>
-        <strong>{{ monthLabel }}</strong>
-        <div>
-          <button type="button" aria-label="上个月" @click="moveMonth(-1)">‹</button>
-          <button type="button" aria-label="下个月" @click="moveMonth(1)">›</button>
+    <Teleport to="body" :disabled="disableTeleport">
+      <div
+        v-if="open"
+        ref="popover"
+        class="gantt-date-popover"
+        role="dialog"
+        :aria-label="ariaLabel"
+        :style="popoverStyle"
+      >
+        <header>
+          <strong>{{ monthLabel }}</strong>
+          <div>
+            <button type="button" aria-label="上个月" @click="moveMonth(-1)">‹</button>
+            <button type="button" aria-label="下个月" @click="moveMonth(1)">›</button>
+          </div>
+        </header>
+        <div class="gantt-date-weekdays">
+          <span v-for="weekday in weekdays" :key="weekday">{{ weekday }}</span>
         </div>
-      </header>
-      <div class="gantt-date-weekdays">
-        <span v-for="weekday in weekdays" :key="weekday">{{ weekday }}</span>
+        <div class="gantt-date-days">
+          <button
+            v-for="item in calendarDays"
+            :key="item.value"
+            type="button"
+            :class="{
+              muted: !item.currentMonth,
+              selected: item.selected,
+              today: item.today
+            }"
+            :aria-label="item.value"
+            :aria-pressed="item.selected"
+            @click="choose(item.value)"
+          >
+            {{ item.day }}
+          </button>
+        </div>
+        <footer>
+          <button type="button" @click="clear">清除</button>
+          <button type="button" @click="chooseToday">今天</button>
+        </footer>
       </div>
-      <div class="gantt-date-days">
-        <button
-          v-for="item in calendarDays"
-          :key="item.value"
-          type="button"
-          :class="{
-            muted: !item.currentMonth,
-            selected: item.selected,
-            today: item.today
-          }"
-          :aria-label="item.value"
-          :aria-pressed="item.selected"
-          @click="choose(item.value)"
-        >
-          {{ item.day }}
-        </button>
-      </div>
-      <footer>
-        <button type="button" @click="clear">清除</button>
-        <button type="button" @click="chooseToday">今天</button>
-      </footer>
-    </div>
+    </Teleport>
   </div>
 </template>

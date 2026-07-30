@@ -34,27 +34,34 @@ export function createBasicTasks(): GanttTask[] {
 
 export function createLargeDataset(count: number): GanttTask[] {
   const tasks: GanttTask[] = []
-  const rootCount = Math.ceil(count / 25)
+  const rootCount = Math.ceil(count / 37)
 
   for (let group = 0; group < rootCount; group += 1) {
     const groupId = `group-${group + 1}`
     const groupStart = addDays("2026-07-01", group % 40)
-    tasks.push(makeTask(groupId, `项目包 ${group + 1}`, "summary", formatDate(groupStart), 26, undefined, undefined, 35, `负责人 ${group % 12 + 1}`))
+    tasks.push(makeTask(groupId, `项目包 ${group + 1}`, "summary", formatDate(groupStart), 32, undefined, undefined, 35, `负责人 ${group % 12 + 1}`))
 
-    for (let item = 0; item < 24 && tasks.length < count; item += 1) {
-      const id = `${groupId}-task-${item + 1}`
-      const start = addDays(groupStart, item % 18)
-      const end = addDays(start, 2 + (item % 6))
-      tasks.push({
-        id,
-        name: `任务 ${tasks.length}`,
-        type: "task",
-        parentId: groupId,
-        plan: { start, end },
-        actual: { start, end, progress: (item * 7) % 100 },
-        resources: [`成员 ${item % 8 + 1}`],
-        dependencies: []
-      })
+    for (let module = 0; module < 6 && tasks.length < count; module += 1) {
+      const moduleId = `${groupId}-module-${module + 1}`
+      const moduleStart = addDays(groupStart, module * 4)
+      tasks.push(makeTask(moduleId, `模块 ${group + 1}.${module + 1}`, "summary", formatDate(moduleStart), 12, groupId, undefined, 30 + module * 8, `模块负责人 ${module % 6 + 1}`))
+
+      for (let item = 0; item < 5 && tasks.length < count; item += 1) {
+        const id = `${moduleId}-task-${item + 1}`
+        const start = addDays(moduleStart, item * 2)
+        const planEnd = addDays(start, 2 + (item % 4))
+        const actualEnd = addDays(planEnd, item % 3)
+        tasks.push({
+          id,
+          name: `任务 ${group + 1}.${module + 1}.${item + 1}`,
+          type: "task",
+          parentId: moduleId,
+          plan: { start, end: planEnd },
+          actual: { start, end: actualEnd, progress: item === 4 ? 100 : (item * 17 + group) % 100 },
+          resources: [`成员 ${item % 8 + 1}`],
+          dependencies: []
+        })
+      }
     }
   }
 

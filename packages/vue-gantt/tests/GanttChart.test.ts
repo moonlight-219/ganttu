@@ -55,6 +55,18 @@ function dateKey(value: string | Date | undefined) {
 }
 
 describe("GanttChart", () => {
+  it("exposes the image export api", () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        markers,
+        config: { viewMode: "day" }
+      }
+    })
+
+    expect(typeof (wrapper.vm as unknown as { exportImage?: unknown }).exportImage).toBe("function")
+  })
+
   it("draws dependency links relative to the timeline body, not the header", () => {
     const calls: Array<[string, ...number[]]> = []
     const context = {
@@ -295,7 +307,7 @@ describe("GanttChart", () => {
     cancelAnimationFrame.mockRestore()
   })
 
-  it("keeps the timeline origin fixed while extending actual and plan starts into an earlier week", async () => {
+  it("expands the timeline range while extending actual and plan starts into an earlier week", async () => {
     const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
         callback(0)
@@ -316,14 +328,13 @@ describe("GanttChart", () => {
       }
     })
 
-    const initialFirstTick = wrapper.find(".gantt-tick").text()
     const startHandle = wrapper.find(".gantt-bar.task .gantt-resize.start")
     await startHandle.trigger("pointerdown", { clientX: 240, pointerId: 1 })
     await startHandle.trigger("pointermove", { clientX: 60, pointerId: 1 })
     await nextTick()
 
-    expect(wrapper.find(".gantt-tick").text()).toBe(initialFirstTick)
-    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(-90px")
+    expect(wrapper.find(".gantt-tick").text()).toBe("28")
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(120px")
     expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("width: 330px")
     wrapper.unmount()
 
@@ -339,14 +350,13 @@ describe("GanttChart", () => {
         config: { viewMode: "day", columnWidth: 30, editablePlan: true }
       }
     })
-    const initialPlanFirstTick = planWrapper.find(".gantt-tick").text()
     const planStartHandle = planWrapper.find(".gantt-plan-bar.task .gantt-plan-resize.start")
     await planStartHandle.trigger("pointerdown", { clientX: 240, pointerId: 2 })
     await planStartHandle.trigger("pointermove", { clientX: 60, pointerId: 2 })
     await nextTick()
 
-    expect(planWrapper.find(".gantt-tick").text()).toBe(initialPlanFirstTick)
-    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("translate(-90px")
+    expect(planWrapper.find(".gantt-tick").text()).toBe("28")
+    expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("translate(120px")
     expect(planWrapper.find(".gantt-plan-bar.task").attributes("style")).toContain("width: 330px")
     planWrapper.unmount()
 
@@ -1257,7 +1267,9 @@ describe("GanttChart", () => {
       }
     })
 
-    await wrapper.findAll(".gantt-actions button")[2].trigger("click")
+    const markerButton = wrapper.findAll(".gantt-actions button").find((button) => button.text() === "新建里程碑")
+    expect(markerButton).toBeTruthy()
+    await markerButton!.trigger("click")
     expect(wrapper.find(".gantt-task-drawer").exists()).toBe(false)
     expect(wrapper.find(".gantt-editor").exists()).toBe(true)
     expect(wrapper.findAll(".gantt-color-swatch")).toHaveLength(8)

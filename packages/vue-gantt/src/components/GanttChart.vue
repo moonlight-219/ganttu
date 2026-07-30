@@ -22,11 +22,13 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import GanttDatePicker from "./GanttDatePicker.vue"
 import GanttSelect from "./GanttSelect.vue"
+import GanttDialog from "./GanttDialog.vue"
 import { drawGrid } from "../rendering/canvas/grid"
 import { buildOrthogonalLinkPath, taskAnchorPoint, type LinkAnchor } from "../rendering/canvas/links"
 import { setupCanvas } from "../rendering/canvas/viewport"
 import type {
   GanttLinkRejection,
+  GanttExportImageOptions,
   GanttMarkerEditRequest,
   GanttMarkerEditorDraft,
   GanttTaskEditRequest,
@@ -122,9 +124,13 @@ const timelineRef = ref<HTMLDivElement | null>(null)
 const tableRef = ref<HTMLDivElement | null>(null)
 const taskListWidth = ref(0)
 const resizingTaskList = ref(false)
+const isFullscreen = ref(false)
+const exportingImage = ref(false)
+const viewportSize = ref({ width: 0, height: 0 })
 let stopSplitterResize: (() => void) | null = null
 let linkDraftFrame = 0
 let pendingLinkDraftPoint: { x: number; y: number } | null = null
+let resizeObserver: ResizeObserver | null = null
 const editorOpen = ref(false)
 const editMode = ref<"create" | "edit">("edit")
 const editDraft = ref<GanttTaskEditorDraft>({
@@ -264,8 +270,9 @@ const dateRange = computed(() => {
     }
   }
 
+  const rangeTasks = dragPreview.value ? displayedTasks.value : baseDisplayedTasks.value
   const dates = [
-    ...baseDisplayedTasks.value.flatMap((task) => [
+    ...rangeTasks.flatMap((task) => [
       toDate(task.plan.start),
       toDate(task.plan.end),
       toDate(task.actual.start),
@@ -293,10 +300,11 @@ const scale = computed<TimeScale[]>(() => computeTimeScale(
 const totalWidth = computed(() => scale.value.reduce((sum, tick) => sum + tick.width, 0))
 const totalHeight = computed(() => mergedConfig.value.headerHeight + flatTasks.value.length * mergedConfig.value.rowHeight)
 const viewportHeight = computed(() => {
-  const measuredHeight = timelineRef.value?.clientHeight
-    ?? tableRef.value?.clientHeight
-    ?? (Number.isFinite(Number.parseFloat(chartHeight.value)) ? Number.parseFloat(chartHeight.value) : 0)
-    ?? 0
+  const fallbackHeight = Number.isFinite(Number.parseFloat(chartHeight.value)) ? Number.parseFloat(chartHeight.value) : 0
+  const measuredHeight = viewportSize.value.height
+    || timelineRef.value?.clientHeight
+    || tableRef.value?.clientHeight
+    || fallbackHeight
   return Math.max(mergedConfig.value.rowHeight, measuredHeight - mergedConfig.value.headerHeight)
 })
 const visibleWindow = computed(() => {
@@ -318,24 +326,16 @@ const visibleWindow = computed(() => {
 })
 const timelineStart = computed(() => scale.value[0]?.start ?? dateRange.value.start)
 const weekendColumns = computed(() => {
-  const columns: Array<{ date: string; left: number }> = []
   if (mergedConfig.value.viewMode !== "day") {
-    return columns
+    return []
   }
-  const last = scale.value[scale.value.length - 1]?.end
-  if (!last) {
-    return columns
-  }
-
-  for (let date = timelineStart.value, dayIndex = 0; date.getTime() <= last.getTime(); date = addDays(date, 1), dayIndex += 1) {
-    if (date.getDay() === 0 || date.getDay() === 6) {
-      columns.push({
-        date: formatDate(date),
-        left: dayIndex * mergedConfig.value.columnWidth
-      })
-    }
-  }
-  return columns
+  return scale.value
+    .filter((tick) => tick.start.getDay() === 0 || tick.start.getDay() === 6)
+    .map((tick) => ({
+      date: formatDate(tick.start),
+      left: tick.left,
+      width: tick.width
+    }))
 })
 const timelineInnerStyle = computed(() => ({
   width: `${totalWidth.value}px`,
@@ -570,9 +570,29 @@ watch([scale, layouts, scrollLeft, scrollTop, taskListWidth], () => {
 
 onMounted(() => {
   drawCanvas()
+  updateViewportSize()
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      updateViewportSize()
+      nextTick(drawCanvas)
+    })
+    if (chartRef.value) {
+      resizeObserver.observe(chartRef.value)
+    }
+    if (timelineRef.value) {
+      resizeObserver.observe(timelineRef.value)
+    }
+    if (tableRef.value) {
+      resizeObserver.observe(tableRef.value)
+    }
+  }
+  document.addEventListener("fullscreenchange", syncFullscreenState)
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener("fullscreenchange", syncFullscreenState)
+  resizeObserver?.disconnect()
+  resizeObserver = null
   stopSplitterResize?.()
   clearTaskDetailsTimer()
   if (linkNoticeTimer) {
@@ -582,6 +602,24 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(linkDraftFrame)
   }
 })
+
+function syncFullscreenState() {
+  isFullscreen.value = document.fullscreenElement === chartRef.value
+  requestAnimationFrame(() => {
+    updateViewportSize()
+    drawCanvas()
+  })
+}
+
+function updateViewportSize() {
+  const chart = chartRef.value
+  const timeline = timelineRef.value
+  const table = tableRef.value
+  viewportSize.value = {
+    width: timeline?.clientWidth ?? chart?.clientWidth ?? 0,
+    height: timeline?.clientHeight ?? table?.clientHeight ?? chart?.clientHeight ?? 0
+  }
+}
 
 function toggleCollapsed(taskId: string) {
   const next = new Set(collapsedIds.value)
@@ -1147,6 +1185,48 @@ function syncTableScroll(event: Event) {
   }
 }
 
+function horizontalEdgeScroll(clientX: number): boolean {
+  const timeline = timelineRef.value
+  if (!timeline) {
+    return false
+  }
+  const rect = timeline.getBoundingClientRect()
+  if (rect.width <= 0) {
+    return false
+  }
+  const edgeSize = 56
+  const maxStep = Math.max(4, Math.min(18, mergedConfig.value.columnWidth / 2))
+  let nextScrollLeft = timeline.scrollLeft
+
+  if (clientX < rect.left + edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - clientX) / edgeSize))
+    nextScrollLeft = Math.max(0, timeline.scrollLeft - Math.ceil(maxStep * ratio))
+  } else if (clientX > rect.right - edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (clientX - (rect.right - edgeSize)) / edgeSize))
+    const maxScrollLeft = Math.max(0, timeline.scrollWidth - timeline.clientWidth)
+    nextScrollLeft = Math.min(maxScrollLeft, timeline.scrollLeft + Math.ceil(maxStep * ratio))
+  }
+
+  if (nextScrollLeft === timeline.scrollLeft) {
+    return false
+  }
+  timeline.scrollLeft = nextScrollLeft
+  scrollLeft.value = nextScrollLeft
+  return true
+}
+
+function isNearTimelineHorizontalEdge(clientX: number): boolean {
+  const rect = timelineRef.value?.getBoundingClientRect()
+  if (!rect) {
+    return false
+  }
+  if (rect.width <= 0) {
+    return false
+  }
+  const edgeSize = 56
+  return clientX < rect.left + edgeSize || clientX > rect.right - edgeSize
+}
+
 function updateLinkDraft(event: PointerEvent) {
   if (!linkDraft.value) {
     return
@@ -1257,6 +1337,489 @@ function drawCanvas() {
   }
 
   drawGrid(context, scale.value, mergedConfig.value.rowHeight, width, height, scrollLeft.value, scrollTop.value)
+}
+
+async function exportImage(options: GanttExportImageOptions = {}): Promise<string> {
+  await nextTick()
+  drawCanvas()
+
+  const dataUrl = renderGanttCanvasImage(options)
+  if (options.download !== false) {
+    const type = options.type ?? "image/png"
+    downloadDataUrl(dataUrl, options.filename ?? `gantt-${formatDate(new Date())}.${type === "image/jpeg" ? "jpg" : "png"}`)
+  }
+  return dataUrl
+}
+
+function renderGanttCanvasImage(options: GanttExportImageOptions = {}): string {
+  const chart = chartRef.value
+  const timeline = timelineRef.value
+  const table = tableRef.value
+  if (!chart) {
+    throw new Error("Gantt chart is not mounted")
+  }
+
+  const rect = chart.getBoundingClientRect()
+  const width = Math.max(1, Math.ceil(rect.width))
+  const height = Math.max(1, Math.ceil(rect.height))
+  const pixelRatio = Math.max(1, options.pixelRatio ?? window.devicePixelRatio ?? 1)
+  const background = options.background ?? "#ffffff"
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.floor(width * pixelRatio))
+  canvas.height = Math.max(1, Math.floor(height * pixelRatio))
+  const context = canvas.getContext("2d")
+  if (!context) {
+    throw new Error("Canvas context is not available")
+  }
+
+  context.scale(pixelRatio, pixelRatio)
+  context.fillStyle = background
+  context.fillRect(0, 0, width, height)
+
+  const toolbarHeight = Math.round(chart.querySelector<HTMLElement>(".gantt-toolbar")?.getBoundingClientRect().height ?? 48)
+  const headerHeight = mergedConfig.value.headerHeight
+  const rowHeight = mergedConfig.value.rowHeight
+  const tableWidth = Math.min(taskListWidth.value, width)
+  const splitterWidth = 8
+  const timelineX = Math.min(width, tableWidth + splitterWidth)
+  const timelineWidth = Math.max(1, timeline?.clientWidth ?? width - timelineX)
+  const tableScrollLeft = table?.scrollLeft ?? 0
+
+  drawExportToolbar(context, width, toolbarHeight)
+  drawExportTable(context, tableWidth, toolbarHeight, headerHeight, rowHeight, tableScrollLeft)
+  drawExportSplitter(context, tableWidth, toolbarHeight, splitterWidth, height - toolbarHeight)
+  drawExportTimeline(context, timelineX, toolbarHeight, timelineWidth, height - toolbarHeight, headerHeight, rowHeight)
+
+  return canvas.toDataURL(options.type ?? "image/png")
+}
+
+async function exportDomImage(options: GanttExportImageOptions = {}): Promise<string> {
+  const chart = chartRef.value
+  if (!chart) {
+    throw new Error("Gantt chart is not mounted")
+  }
+
+  const rect = chart.getBoundingClientRect()
+  const width = Math.max(1, Math.ceil(rect.width))
+  const height = Math.max(1, Math.ceil(rect.height))
+  const pixelRatio = Math.max(1, options.pixelRatio ?? window.devicePixelRatio ?? 1)
+  const background = options.background ?? "#ffffff"
+  const clone = chart.cloneNode(true) as HTMLElement
+  clone.querySelectorAll(".gantt-editor-backdrop, .gantt-editor, .gantt-task-popover, .gantt-link-notice").forEach((node) => node.remove())
+  replaceCanvasWithImages(chart, clone)
+  clone.style.width = `${width}px`
+  clone.style.height = `${height}px`
+  clone.style.margin = "0"
+  clone.style.transform = "none"
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width * pixelRatio}" height="${height * pixelRatio}" viewBox="0 0 ${width} ${height}">
+  <foreignObject width="100%" height="100%">
+    <div xmlns="http://www.w3.org/1999/xhtml">
+      <style>${collectDocumentStyles()}</style>
+      ${clone.outerHTML}
+    </div>
+  </foreignObject>
+</svg>`
+  const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
+  try {
+    const image = await loadImage(svgUrl)
+    const canvas = document.createElement("canvas")
+    canvas.width = Math.max(1, Math.floor(width * pixelRatio))
+    canvas.height = Math.max(1, Math.floor(height * pixelRatio))
+    const context = canvas.getContext("2d")
+    if (!context) {
+      throw new Error("Canvas context is not available")
+    }
+    context.fillStyle = background
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.scale(pixelRatio, pixelRatio)
+    context.drawImage(image, 0, 0, width, height)
+    const type = options.type ?? "image/png"
+    const dataUrl = canvas.toDataURL(type)
+    if (options.download !== false) {
+      downloadDataUrl(dataUrl, options.filename ?? `gantt-${formatDate(new Date())}.${type === "image/jpeg" ? "jpg" : "png"}`)
+    }
+    return dataUrl
+  } finally {
+    URL.revokeObjectURL(svgUrl)
+  }
+}
+
+function drawExportToolbar(context: CanvasRenderingContext2D, width: number, height: number) {
+  context.fillStyle = "#ffffff"
+  context.fillRect(0, 0, width, height)
+  context.strokeStyle = "#e8edf3"
+  context.beginPath()
+  context.moveTo(0, height - 0.5)
+  context.lineTo(width, height - 0.5)
+  context.stroke()
+  drawCanvasText(context, "项目甘特图", 14, height / 2 + 5, 700, "#182230", 180)
+  drawCanvasText(context, `${flatTasks.value.length} 个任务`, 100, height / 2 + 5, 400, "#667085", 120)
+}
+
+function drawExportTable(
+  context: CanvasRenderingContext2D,
+  width: number,
+  top: number,
+  headerHeight: number,
+  rowHeight: number,
+  scrollLeftValue: number
+) {
+  context.save()
+  clipCanvasRect(context, 0, top, width, Math.max(1, context.canvas.height))
+  context.fillStyle = "#ffffff"
+  context.fillRect(0, top, width, context.canvas.height)
+  context.fillStyle = "#fbfcfe"
+  context.fillRect(0, top, width, headerHeight)
+  context.strokeStyle = "#e8edf3"
+  context.beginPath()
+  context.moveTo(0, top + headerHeight - 0.5)
+  context.lineTo(width, top + headerHeight - 0.5)
+  context.stroke()
+
+  let cursor = -scrollLeftValue
+  for (const column of tableColumns.value) {
+    const columnWidth = Math.max(48, column.width ?? 100)
+    if (cursor + columnWidth >= 0 && cursor <= width) {
+      context.strokeStyle = "#eef2f7"
+      context.strokeRect(cursor, top, columnWidth, headerHeight)
+      drawCanvasText(context, column.label, cursor + 10, top + headerHeight / 2 + 4, 600, "#66758f", columnWidth - 20, column.align ?? "center")
+    }
+    cursor += columnWidth
+  }
+
+  visibleRows.value.forEach((flat) => {
+    const rowY = top + headerHeight + flat.rowIndex * rowHeight - scrollTop.value
+    if (rowY > context.canvas.height || rowY + rowHeight < top + headerHeight) return
+    const task = previewTask(flat.task)
+    context.fillStyle = flat.task.id === selectedTaskId.value ? "rgba(37, 99, 235, 0.09)" : flat.task.type === "summary" ? "#fbfcfe" : "#ffffff"
+    context.fillRect(0, rowY, width, rowHeight)
+    context.strokeStyle = "#edf1f6"
+    context.beginPath()
+    context.moveTo(0, rowY + rowHeight - 0.5)
+    context.lineTo(width, rowY + rowHeight - 0.5)
+    context.stroke()
+
+    let cellX = -scrollLeftValue
+    for (const column of tableColumns.value) {
+      const columnWidth = Math.max(48, column.width ?? 100)
+      if (cellX + columnWidth >= 0 && cellX <= width) {
+        context.strokeStyle = "#eef2f7"
+        context.beginPath()
+        context.moveTo(cellX + columnWidth - 0.5, rowY)
+        context.lineTo(cellX + columnWidth - 0.5, rowY + rowHeight)
+        context.stroke()
+        drawExportTableCell(context, column, task, flat.depth, cellX, rowY, columnWidth, rowHeight)
+      }
+      cellX += columnWidth
+    }
+  })
+  context.restore()
+}
+
+function drawExportTableCell(
+  context: CanvasRenderingContext2D,
+  column: CustomColumn,
+  task: GanttTask,
+  depth: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) {
+  if (column.key === "name") {
+    const textX = x + 12 + depth * 18
+    context.fillStyle = task.type === "summary" ? "#111827" : "#2563eb"
+    context.beginPath()
+    context.arc(textX + 6, y + height / 2, task.type === "summary" ? 3 : 2.5, 0, Math.PI * 2)
+    context.fill()
+    drawCanvasText(context, task.name, textX + 18, y + height / 2 + 4, task.type === "summary" ? 700 : 500, "#1f3b66", width - (textX - x) - 24, "left")
+    return
+  }
+  if (column.key === "progress") {
+    const value = Math.max(0, Math.min(100, Number(task.actual.progress) || 0))
+    const barWidth = Math.max(28, width - 32)
+    const barX = x + 12
+    const barY = y + height / 2 - 4
+    drawRoundRect(context, barX, barY, barWidth, 8, 999, "#e9eef5")
+    drawRoundRect(context, barX, barY, barWidth * value / 100, 8, 999, progressColor())
+    drawCanvasText(context, `${value}%`, barX + barWidth + 4, y + height / 2 + 4, 600, "#475467", 34, "left")
+    return
+  }
+  const text = ["planStart", "planEnd", "actualStart", "actualEnd"].includes(column.key)
+    ? shortDate(String(columnValue(column, task)))
+    : String(columnValue(column, task))
+  drawCanvasText(context, text, x + 8, y + height / 2 + 4, task.type === "summary" ? 700 : 500, "#475467", width - 16, column.align ?? "center")
+}
+
+function drawExportSplitter(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
+  context.fillStyle = "#f8fafc"
+  context.fillRect(x, y, width, height)
+  context.strokeStyle = "#d7dde8"
+  context.beginPath()
+  context.moveTo(x + width - 0.5, y)
+  context.lineTo(x + width - 0.5, y + height)
+  context.stroke()
+}
+
+function drawExportTimeline(
+  context: CanvasRenderingContext2D,
+  x: number,
+  top: number,
+  width: number,
+  height: number,
+  headerHeight: number,
+  rowHeight: number
+) {
+  context.save()
+  clipCanvasRect(context, x, top, width, height)
+  context.fillStyle = "#ffffff"
+  context.fillRect(x, top, width, height)
+  drawExportTimelineHeader(context, x, top, width, headerHeight)
+  drawExportTimelineGrid(context, x, top + headerHeight, width, height - headerHeight, rowHeight)
+  drawExportMarkers(context, x, top + headerHeight, width, height - headerHeight)
+  drawExportBars(context, x, top, width, height, headerHeight)
+  context.restore()
+}
+
+function drawExportTimelineHeader(context: CanvasRenderingContext2D, x: number, top: number, width: number, headerHeight: number) {
+  context.fillStyle = "#ffffff"
+  context.fillRect(x, top, width, headerHeight)
+  context.strokeStyle = "#d7dde8"
+  context.strokeRect(x, top, width, headerHeight)
+  for (const header of topHeaders.value) {
+    const left = x + header.left - scrollLeft.value
+    if (left + header.width < x || left > x + width) continue
+    context.strokeStyle = "#d7dde8"
+    context.strokeRect(left, top, header.width, 24)
+    drawCanvasText(context, header.label, left + 4, top + 16, 600, "#475467", header.width - 8, "center")
+  }
+  for (const tick of scale.value) {
+    const left = x + tick.left - scrollLeft.value
+    if (left + tick.width < x || left > x + width) continue
+    if (mergedConfig.value.viewMode === "day" && (tick.start.getDay() === 0 || tick.start.getDay() === 6)) {
+      context.fillStyle = "#eef1f5"
+      context.fillRect(left, top + 24, tick.width, Math.max(0, headerHeight - 24))
+    }
+    context.strokeStyle = "#d7dde8"
+    context.strokeRect(left, top + 24, tick.width, Math.max(0, headerHeight - 24))
+    drawCanvasText(context, tickLabel(tick), left + 4, top + 42, 500, "#667085", tick.width - 8, "center")
+  }
+}
+
+function drawExportTimelineGrid(context: CanvasRenderingContext2D, x: number, top: number, width: number, height: number, rowHeight: number) {
+  const columnWidth = mergedConfig.value.columnWidth
+  context.fillStyle = "#ffffff"
+  context.fillRect(x, top, width, height)
+  context.fillStyle = "rgba(248, 250, 252, 0.72)"
+  for (let rowY = top - (scrollTop.value % (rowHeight * 2)); rowY < top + height; rowY += rowHeight * 2) {
+    context.fillRect(x, rowY, width, rowHeight)
+  }
+  context.strokeStyle = "rgba(16, 24, 40, 0.09)"
+  for (let rowY = top - (scrollTop.value % rowHeight); rowY < top + height; rowY += rowHeight) {
+    context.beginPath()
+    context.moveTo(x, rowY + 0.5)
+    context.lineTo(x + width, rowY + 0.5)
+    context.stroke()
+  }
+  context.strokeStyle = "rgba(37, 99, 235, 0.12)"
+  for (let columnX = x - (scrollLeft.value % columnWidth); columnX < x + width; columnX += columnWidth) {
+    context.beginPath()
+    context.moveTo(columnX + 0.5, top)
+    context.lineTo(columnX + 0.5, top + height)
+    context.stroke()
+  }
+  if (mergedConfig.value.viewMode === "day") {
+    context.fillStyle = "rgba(71, 84, 103, 0.11)"
+    for (const weekend of weekendColumns.value) {
+      const left = x + weekend.left - scrollLeft.value
+      if (left + weekend.width < x || left > x + width) continue
+      context.fillRect(left, top, weekend.width, height)
+    }
+  }
+}
+
+function drawExportMarkers(context: CanvasRenderingContext2D, x: number, top: number, width: number, height: number) {
+  for (const group of groupedMarkers.value) {
+    const markerX = x + ((toDate(group.date).getTime() - timelineStart.value.getTime()) / 86400000 + 0.5) * mergedConfig.value.columnWidth - scrollLeft.value
+    if (markerX < x || markerX > x + width) continue
+    context.strokeStyle = group.color || "#d97706"
+    context.lineWidth = 2
+    context.beginPath()
+    context.moveTo(markerX, top)
+    context.lineTo(markerX, top + height)
+    context.stroke()
+    const label = group.markers[0]?.name ?? ""
+    if (label) {
+      const labelWidth = Math.min(120, Math.max(56, label.length * 14))
+      drawRoundRect(context, markerX - 4, top + 8, labelWidth, 24, 4, group.color || "#d97706")
+      drawCanvasText(context, label, markerX + 4, top + 24, 700, "#ffffff", labelWidth - 12, "left")
+    }
+  }
+  context.lineWidth = 1
+}
+
+function drawExportBars(context: CanvasRenderingContext2D, x: number, top: number, width: number, height: number, headerHeight: number) {
+  const { planTop, actualTop } = barVerticalMetrics()
+  const bottom = top + height
+  for (const layout of renderedLayouts.value) {
+    const task = taskById.value.get(layout.taskId)
+    if (!task || task.type === "milestone") continue
+    const displayTask = previewTask(task)
+    const rowY = top + layout.top - scrollTop.value
+    if (rowY > bottom || rowY + mergedConfig.value.rowHeight < top + headerHeight) continue
+    if (mergedConfig.value.showPlanBar !== false) {
+      const plan = planPreviewLayout(displayTask)
+      const planX = x + plan.left - scrollLeft.value
+      const planY = rowY + planTop
+      drawRoundRect(context, planX, planY, plan.width, PLAN_BAR_HEIGHT, 999, displayTask.planColor || defaultPlanColor())
+      drawRoundRect(context, planX, planY, plan.width * Math.max(0, Math.min(100, displayTask.actual.progress)) / 100, PLAN_BAR_HEIGHT, 999, "rgba(20, 116, 112, 0.72)")
+    }
+    if (mergedConfig.value.showActualBar !== false) {
+      const actualX = x + layout.left - scrollLeft.value
+      const actualY = rowY + (displayTask.type === "summary" ? actualTop + 1 : actualTop)
+      const actualHeight = displayTask.type === "summary" ? 8 : ACTUAL_BAR_HEIGHT
+      drawRoundRect(context, actualX, actualY, layout.width, actualHeight, 999, actualTaskColor(displayTask))
+      if (isOverdue(displayTask)) {
+        const actualStart = toDate(displayTask.actual.start)
+        const actualEnd = toDate(displayTask.actual.end)
+        const overdueStart = new Date(Math.max(actualStart.getTime(), addDays(displayTask.plan.end, 1).getTime()))
+        const totalDays = taskDurationDays(actualStart, actualEnd)
+        const offsetDays = Math.max(0, Math.round((overdueStart.getTime() - actualStart.getTime()) / 86400000))
+        const overdueX = actualX + Math.min(layout.width, layout.width * offsetDays / totalDays)
+        drawRoundRect(context, overdueX, actualY, Math.max(0, actualX + layout.width - overdueX), actualHeight, 999, "#dc2626")
+      }
+    }
+  }
+}
+
+function clipCanvasRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
+  context.beginPath()
+  context.rect(x, y, width, height)
+  context.clip()
+}
+
+function drawRoundRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, color: string) {
+  if (width <= 0 || height <= 0) return
+  const r = Math.min(radius, width / 2, height / 2)
+  context.fillStyle = color
+  context.beginPath()
+  context.moveTo(x + r, y)
+  context.lineTo(x + width - r, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + r)
+  context.lineTo(x + width, y + height - r)
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height)
+  context.lineTo(x + r, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - r)
+  context.lineTo(x, y + r)
+  context.quadraticCurveTo(x, y, x + r, y)
+  context.fill()
+}
+
+function drawCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  weight: number,
+  color: string,
+  maxWidth: number,
+  align: CanvasTextAlign = "left"
+) {
+  context.save()
+  context.fillStyle = color
+  context.font = `${weight} 12px "Microsoft YaHei", "Segoe UI", Arial, sans-serif`
+  context.textAlign = align
+  context.textBaseline = "alphabetic"
+  const originX = align === "center" ? x + maxWidth / 2 : align === "right" ? x + maxWidth : x
+  let output = text
+  while (output.length > 1 && context.measureText(output).width > maxWidth) {
+    output = `${output.slice(0, -2)}…`
+  }
+  context.fillText(output, originX, y)
+  context.restore()
+}
+
+async function handleExportImage() {
+  if (exportingImage.value) {
+    return
+  }
+  exportingImage.value = true
+  try {
+    await exportImage()
+  } catch (error) {
+    console.error(error)
+    window.alert("导出图片失败，请稍后重试或检查浏览器是否限制了图片下载。")
+  } finally {
+    exportingImage.value = false
+  }
+}
+
+function replaceCanvasWithImages(source: HTMLElement, target: HTMLElement) {
+  const sourceCanvases = Array.from(source.querySelectorAll("canvas"))
+  const targetCanvases = Array.from(target.querySelectorAll("canvas"))
+  targetCanvases.forEach((canvas, index) => {
+    const sourceCanvas = sourceCanvases[index]
+    if (!sourceCanvas) return
+    const image = document.createElement("img")
+    image.src = sourceCanvas.toDataURL("image/png")
+    image.className = canvas.className
+    image.setAttribute("style", canvas.getAttribute("style") ?? "")
+    image.setAttribute("aria-hidden", "true")
+    canvas.replaceWith(image)
+  })
+}
+
+function collectDocumentStyles(): string {
+  return Array.from(document.styleSheets)
+    .map((sheet) => {
+      try {
+        return Array.from(sheet.cssRules).map((rule) => rule.cssText).join("\n")
+      } catch {
+        return ""
+      }
+    })
+    .join("\n")
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error("Failed to render gantt image"))
+    image.src = src
+  })
+}
+
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const link = document.createElement("a")
+  link.href = dataUrl
+  link.download = filename
+  link.style.display = "none"
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+async function enterFullscreen() {
+  const chart = chartRef.value
+  if (!chart || !chart.requestFullscreen) return
+  await chart.requestFullscreen()
+}
+
+async function exitFullscreen() {
+  if (document.fullscreenElement) {
+    await document.exitFullscreen()
+  }
+}
+
+async function toggleFullscreen() {
+  if (document.fullscreenElement === chartRef.value) {
+    await exitFullscreen()
+  } else {
+    await enterFullscreen()
+  }
 }
 
 function taskStyle(layout: TaskLayout, task: GanttTask) {
@@ -1448,6 +2011,7 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   event.stopPropagation()
 
   const startX = event.clientX
+  const originalScrollLeft = scrollLeft.value
   const columnWidth = mergedConfig.value.columnWidth
   const originalStart = toDate(task.actual.start)
   const originalEnd = toDate(task.actual.end)
@@ -1463,16 +2027,14 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   hideTaskDetails()
   let lastDeltaDays = 0
   let previewFrame = 0
+  let edgeScrollFrame = 0
   let pendingDeltaDays = 0
+  let lastClientX = startX
 
-  const flushPreview = () => {
-    previewFrame = 0
-    const patch = buildDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays)
-    dragPreview.value = { taskId: task.id, patch }
-  }
+  const computeDeltaDays = (clientX: number) =>
+    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft) / columnWidth)
 
-  const onMove = (moveEvent: PointerEvent) => {
-    const deltaDays = Math.round((moveEvent.clientX - startX) / columnWidth)
+  const queuePreview = (deltaDays: number) => {
     if (deltaDays === lastDeltaDays) {
       return
     }
@@ -1483,11 +2045,44 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
     }
   }
 
+  const tickEdgeScroll = () => {
+    edgeScrollFrame = 0
+    horizontalEdgeScroll(lastClientX)
+    queuePreview(computeDeltaDays(lastClientX))
+    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX)) {
+      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
+    }
+  }
+
+  const ensureEdgeScroll = () => {
+    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX)) {
+      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
+    }
+  }
+
+  const flushPreview = () => {
+    previewFrame = 0
+    const patch = buildDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays)
+    dragPreview.value = { taskId: task.id, patch }
+  }
+
+  const onMove = (moveEvent: PointerEvent) => {
+    lastClientX = moveEvent.clientX
+    horizontalEdgeScroll(lastClientX)
+    queuePreview(computeDeltaDays(lastClientX))
+    ensureEdgeScroll()
+  }
+
   const onUp = (upEvent: PointerEvent) => {
-    const deltaDays = Math.round((upEvent.clientX - startX) / columnWidth)
+    lastClientX = upEvent.clientX
+    const deltaDays = computeDeltaDays(lastClientX)
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
       previewFrame = 0
+    }
+    if (edgeScrollFrame) {
+      window.cancelAnimationFrame(edgeScrollFrame)
+      edgeScrollFrame = 0
     }
     target.releasePointerCapture?.(event.pointerId)
     target.removeEventListener("pointermove", onMove)
@@ -1510,6 +2105,10 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
       previewFrame = 0
+    }
+    if (edgeScrollFrame) {
+      window.cancelAnimationFrame(edgeScrollFrame)
+      edgeScrollFrame = 0
     }
     target.removeEventListener("pointermove", onMove)
     target.removeEventListener("pointerup", onUp)
@@ -1547,6 +2146,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   event.stopPropagation()
 
   const startX = event.clientX
+  const originalScrollLeft = scrollLeft.value
   const columnWidth = mergedConfig.value.columnWidth
   const originalStart = toDate(task.plan.start)
   const originalEnd = toDate(task.plan.end)
@@ -1563,7 +2163,38 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   hideTaskDetails()
   let lastDeltaDays = 0
   let previewFrame = 0
+  let edgeScrollFrame = 0
   let pendingDeltaDays = 0
+  let lastClientX = startX
+
+  const computeDeltaDays = (clientX: number) =>
+    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft) / columnWidth)
+
+  const queuePreview = (deltaDays: number) => {
+    if (deltaDays === lastDeltaDays) {
+      return
+    }
+    lastDeltaDays = deltaDays
+    pendingDeltaDays = deltaDays
+    if (!previewFrame) {
+      previewFrame = window.requestAnimationFrame(flushPreview)
+    }
+  }
+
+  const tickEdgeScroll = () => {
+    edgeScrollFrame = 0
+    horizontalEdgeScroll(lastClientX)
+    queuePreview(computeDeltaDays(lastClientX))
+    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX)) {
+      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
+    }
+  }
+
+  const ensureEdgeScroll = () => {
+    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX)) {
+      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
+    }
+  }
 
   const flushPreview = () => {
     previewFrame = 0
@@ -1577,22 +2208,22 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   }
 
   const onMove = (moveEvent: PointerEvent) => {
-    const deltaDays = Math.round((moveEvent.clientX - startX) / columnWidth)
-    if (deltaDays === lastDeltaDays) {
-      return
-    }
-    lastDeltaDays = deltaDays
-    pendingDeltaDays = deltaDays
-    if (!previewFrame) {
-      previewFrame = window.requestAnimationFrame(flushPreview)
-    }
+    lastClientX = moveEvent.clientX
+    horizontalEdgeScroll(lastClientX)
+    queuePreview(computeDeltaDays(lastClientX))
+    ensureEdgeScroll()
   }
 
   const onUp = (upEvent: PointerEvent) => {
-    const deltaDays = Math.round((upEvent.clientX - startX) / columnWidth)
+    lastClientX = upEvent.clientX
+    const deltaDays = computeDeltaDays(lastClientX)
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
       previewFrame = 0
+    }
+    if (edgeScrollFrame) {
+      window.cancelAnimationFrame(edgeScrollFrame)
+      edgeScrollFrame = 0
     }
     target.releasePointerCapture?.(event.pointerId)
     target.removeEventListener("pointermove", onMove)
@@ -1623,6 +2254,10 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
       previewFrame = 0
+    }
+    if (edgeScrollFrame) {
+      window.cancelAnimationFrame(edgeScrollFrame)
+      edgeScrollFrame = 0
     }
     target.removeEventListener("pointermove", onMove)
     target.removeEventListener("pointerup", onUp)
@@ -1926,6 +2561,13 @@ function progressColor() {
 function clampProgress(value: number) {
   return Math.min(100, Math.max(0, Number(value) || 0))
 }
+
+defineExpose({
+  exportImage,
+  enterFullscreen,
+  exitFullscreen,
+  toggleFullscreen
+})
 </script>
 
 <template>
@@ -1949,6 +2591,8 @@ function clampProgress(value: number) {
       </div>
       <div class="gantt-actions">
         <button class="quiet" type="button" :disabled="!selectedTask" @click="selectedTask && openEditor(selectedTask)">编辑</button>
+        <button class="quiet" type="button" :disabled="exportingImage" @click="handleExportImage">{{ exportingImage ? "导出中..." : "导出图片" }}</button>
+        <button class="quiet" type="button" @click="toggleFullscreen">{{ isFullscreen ? "退出全屏" : "全屏" }}</button>
         <button class="primary" type="button" @click="openCreateEditor('task')">新建任务</button>
         <button class="secondary" type="button" @click="openCreateMarker">新建里程碑</button>
       </div>
@@ -2152,7 +2796,7 @@ function clampProgress(value: number) {
             <span
               v-for="weekend in weekendColumns"
               :key="weekend.date"
-              :style="{ transform: `translateX(${weekend.left}px)`, width: `${mergedConfig.columnWidth}px` }"
+              :style="{ transform: `translateX(${weekend.left}px)`, width: `${weekend.width}px` }"
             ></span>
           </div>
 
@@ -2366,21 +3010,22 @@ function clampProgress(value: number) {
         :close="closeEditor"
         :remove="deleteSelectedTask"
       >
-    <div class="gantt-editor-backdrop gantt-task-drawer-backdrop" @click="closeEditor"></div>
-    <aside class="gantt-editor gantt-task-drawer" aria-label="任务编辑">
-      <header>
-        <div>
-          <span>{{ editMode === "create" ? "创建" : "编辑" }}</span>
-          <strong>{{ editDraft.type === "milestone" ? "里程碑" : editDraft.type === "summary" ? "阶段" : "任务" }}</strong>
-        </div>
-        <button type="button" aria-label="关闭" @click="closeEditor">×</button>
-      </header>
-
+    <GanttDialog
+      :open="editorOpen"
+      mode="drawer"
+      :title="editDraft.name || (editDraft.type === 'milestone' ? '里程碑' : editDraft.type === 'summary' ? '阶段' : '任务')"
+      :subtitle="editMode === 'create' ? '创建' : '编辑'"
+      :show-delete="editMode === 'edit'"
+      delete-label="删除"
+      aria-label="任务编辑"
+      @close="closeEditor"
+      @save="saveEditor"
+      @delete="deleteSelectedTask"
+    >
       <label v-if="editorFieldVisible('name')">
         名称
         <input v-model.trim="editDraft.name" type="text" maxlength="80" :readonly="!editorFieldEditable('name')">
       </label>
-
       <label v-if="editorFieldVisible('type')">
         类型
         <GanttSelect
@@ -2391,7 +3036,6 @@ function clampProgress(value: number) {
           @update:model-value="setTaskType"
         />
       </label>
-
       <label v-if="editorFieldVisible('parentId')">
         父级阶段
         <GanttSelect
@@ -2402,7 +3046,6 @@ function clampProgress(value: number) {
           @update:model-value="setParentId"
         />
       </label>
-
       <div class="gantt-editor-grid">
         <label v-if="editorFieldVisible('planStart')">
           计划开始
@@ -2422,7 +3065,6 @@ function clampProgress(value: number) {
           />
         </label>
       </div>
-
       <div class="gantt-editor-grid">
         <label v-if="editorFieldVisible('actualStart')">
           实际开始
@@ -2442,17 +3084,14 @@ function clampProgress(value: number) {
           />
         </label>
       </div>
-
       <label v-if="editorFieldVisible('progress')">
         进度
         <input v-model.number="editDraft.progress" type="number" min="0" max="100" :readonly="!editorFieldEditable('progress')">
       </label>
-
       <label v-if="editorFieldVisible('resources')">
         负责人
         <input v-model="editDraft.resources" type="text" placeholder="多人请使用逗号分隔" :readonly="!editorFieldEditable('resources')">
       </label>
-
       <div class="gantt-editor-grid">
         <label v-if="editorFieldVisible('duration')">
           工期
@@ -2463,7 +3102,6 @@ function clampProgress(value: number) {
           <input v-model="editDraft.calendarId" type="text" :readonly="!editorFieldEditable('calendarId')">
         </label>
       </div>
-
       <label v-if="editorFieldVisible('schedulingMode')">
         排程方式
         <GanttSelect
@@ -2474,7 +3112,6 @@ function clampProgress(value: number) {
           @update:model-value="setSchedulingMode"
         />
       </label>
-
       <label
         v-for="column in customEditorColumns"
         :key="column.key"
@@ -2504,7 +3141,6 @@ function clampProgress(value: number) {
         >
         </slot>
       </label>
-
       <div v-if="editorFieldVisible('color')" class="gantt-editor-field">
         <span>实际条颜色</span>
         <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('color') }">
@@ -2515,12 +3151,12 @@ function clampProgress(value: number) {
             class="gantt-color-swatch"
             :class="{ selected: editDraft.color.toLowerCase() === color }"
             :style="{ '--swatch-color': color }"
-            :aria-label="`选择颜色 ${color}`"
+            :aria-label="`选择实际条颜色 ${color}`"
             :aria-pressed="editDraft.color.toLowerCase() === color"
             :disabled="!editorFieldEditable('color')"
             @click="editDraft.color = color"
           >
-            <span>✓</span>
+            <span>&#10003;</span>
           </button>
           <label
             class="gantt-color-custom"
@@ -2531,7 +3167,6 @@ function clampProgress(value: number) {
           </label>
         </div>
       </div>
-
       <div v-if="editorFieldVisible('planColor')" class="gantt-editor-field">
         <span>计划条颜色</span>
         <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('planColor') }">
@@ -2547,14 +3182,11 @@ function clampProgress(value: number) {
             :disabled="!editorFieldEditable('planColor')"
             @click="editDraft.planColor = color"
           >
-            <span>✓</span>
+            <span>&#10003;</span>
           </button>
           <label
             class="gantt-color-custom"
-            :class="{
-              selected: Boolean(editDraft.planColor)
-                && !editorColorOptions.includes(editDraft.planColor.toLowerCase())
-            }"
+            :class="{ selected: Boolean(editDraft.planColor) && !editorColorOptions.includes(editDraft.planColor.toLowerCase()) }"
             aria-label="自定义计划条颜色"
           >
             <input
@@ -2566,23 +3198,15 @@ function clampProgress(value: number) {
           </label>
         </div>
       </div>
-
-      <slot
-        name="editor-footer"
-        :mode="editMode"
-        :draft="editDraft"
-        :save="saveEditor"
-        :close="closeEditor"
-        :remove="deleteSelectedTask"
-      >
-      <footer>
-        <button v-if="editMode === 'edit'" type="button" class="danger" @click="deleteSelectedTask">删除</button>
-        <span></span>
-        <button type="button" @click="closeEditor">取消</button>
-        <button type="button" class="primary" @click="saveEditor">保存</button>
-      </footer>
-      </slot>
-    </aside>
+      <template #footer>
+        <slot name="editor-footer" :mode="editMode" :draft="editDraft" :save="saveEditor" :close="closeEditor" :remove="deleteSelectedTask">
+          <button v-if="editMode === 'edit'" type="button" class="danger" @click="deleteSelectedTask">删除</button>
+          <span></span>
+          <button type="button" @click="closeEditor">取消</button>
+          <button type="button" class="primary" @click="saveEditor">保存</button>
+        </slot>
+      </template>
+    </GanttDialog>
       </slot>
     </template>
 
@@ -2595,26 +3219,26 @@ function clampProgress(value: number) {
         :close="closeMarkerEditor"
         :remove="deleteMarker"
       >
-    <div class="gantt-editor-backdrop gantt-marker-editor-backdrop" @click="closeMarkerEditor"></div>
-    <aside class="gantt-editor gantt-marker-editor" aria-label="里程碑编辑">
-      <header>
-        <div>
-          <span>{{ markerEditMode === "create" ? "创建" : "编辑" }}</span>
-          <strong>里程碑</strong>
-        </div>
-        <button type="button" aria-label="关闭" @click="closeMarkerEditor">×</button>
-      </header>
-
+    <GanttDialog
+      :open="markerEditorOpen"
+      mode="modal"
+      title="里程碑"
+      :subtitle="markerEditMode === 'create' ? '创建' : '编辑'"
+      :show-delete="markerEditMode === 'edit'"
+      delete-label="删除"
+      aria-label="里程碑编辑"
+      @close="closeMarkerEditor"
+      @save="saveMarker"
+      @delete="deleteMarker"
+    >
       <label>
         名称
         <input v-model.trim="markerDraft.name" type="text" maxlength="80">
       </label>
-
       <label>
         日期
         <GanttDatePicker v-model="markerDraft.date" aria-label="里程碑日期" />
       </label>
-
       <div class="gantt-editor-field">
         <span>颜色</span>
         <div class="gantt-color-palette">
@@ -2629,7 +3253,7 @@ function clampProgress(value: number) {
             :aria-pressed="markerDraft.color.toLowerCase() === color"
             @click="markerDraft.color = color"
           >
-            <span>✓</span>
+            <span>&#10003;</span>
           </button>
           <label
             class="gantt-color-custom"
@@ -2640,33 +3264,27 @@ function clampProgress(value: number) {
           </label>
         </div>
       </div>
-
-      <footer>
-        <button v-if="markerEditMode === 'edit'" type="button" class="danger" @click="deleteMarker">删除</button>
-        <span></span>
-        <button type="button" @click="closeMarkerEditor">取消</button>
-        <button type="button" class="primary" @click="saveMarker">保存</button>
-      </footer>
-    </aside>
+    </GanttDialog>
       </slot>
     </template>
 
-    <div v-if="linkEditorOpen" class="gantt-editor-backdrop" @click="closeLinkEditor"></div>
-    <aside v-if="linkEditorOpen" class="gantt-editor gantt-link-editor" aria-label="依赖关系编辑">
-      <header>
-        <div>
-          <span>编辑</span>
-          <strong>任务依赖</strong>
-        </div>
-        <button type="button" aria-label="关闭" @click="closeLinkEditor">×</button>
-      </header>
-
+    <GanttDialog
+      :open="linkEditorOpen"
+      mode="modal"
+      title="任务依赖"
+      subtitle="编辑"
+      show-delete
+      delete-label="删除依赖"
+      aria-label="任务依赖编辑"
+      @close="closeLinkEditor"
+      @save="saveLinkEditor"
+      @delete="deleteLink"
+    >
       <div class="gantt-link-editor-tasks">
         <b>{{ taskName(selectedLink?.sourceId ?? '') }}</b>
-        <span class="gantt-link-editor-arrow">→</span>
+        <span class="gantt-link-editor-arrow">&rarr;</span>
         <b>{{ taskName(selectedLink?.targetId ?? '') }}</b>
       </div>
-
       <label class="gantt-link-editor-type">
         依赖类型
         <GanttSelect
@@ -2676,11 +3294,9 @@ function clampProgress(value: number) {
           @update:model-value="setLinkType"
         />
       </label>
-
       <p class="gantt-link-editor-lock-hint">
         {{ linkLockLabel(linkEditDraft.type) }}
       </p>
-
       <div class="gantt-editor-grid gantt-link-editor-lag">
         <label>
           间隔天数
@@ -2691,18 +3307,12 @@ function clampProgress(value: number) {
           <GanttSelect
             :model-value="linkEditDraft.lagUnit"
             :options="lagUnitOptions"
-            aria-label="间隔单位"
+            aria-label="依赖类型"
             @update:model-value="setLagUnit"
           />
         </label>
       </div>
-
-      <footer>
-        <button type="button" class="danger" @click="deleteLink">删除依赖</button>
-        <span></span>
-        <button type="button" @click="closeLinkEditor">取消</button>
-        <button type="button" class="primary" @click="saveLinkEditor">保存</button>
-      </footer>
-    </aside>
+    </GanttDialog>
   </section>
 </template>
+

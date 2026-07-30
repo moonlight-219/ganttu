@@ -1,9 +1,14 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
     "declaration": true,
     "emitDeclarationOnly": true,
-    "noEmit": false
+    "noEmit": false,
+    "paths": {
+      "@gantt/core": ["../core/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],
   "exclude": ["dist", "tests"]
