@@ -110,6 +110,7 @@ export interface GanttConfig {
   }
   showPlanBar?: boolean
   showActualBar?: boolean
+  showTimelineWhenEmpty?: boolean
   builtInTaskEditor?: boolean
   builtInMarkerEditor?: boolean
   editablePlan?: boolean
@@ -220,6 +221,7 @@ export const defaultConfig: GanttConfig = {
   dateFormat: "YYYY-MM-DD",
   showPlanBar: true,
   showActualBar: true,
+  showTimelineWhenEmpty: false,
   builtInTaskEditor: true,
   builtInMarkerEditor: true,
   editablePlan: false,

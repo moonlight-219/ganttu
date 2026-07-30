@@ -45,7 +45,7 @@ export interface GanttMarkerEditRequest {
 }
 
 export interface GanttLinkRejection {
-  reason: "duplicate" | "cycle" | "self"
+  reason: "duplicate" | "cycle" | "self" | "constraint"
   sourceId: string
   targetId: string
   message: string

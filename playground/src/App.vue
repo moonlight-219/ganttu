@@ -1,9 +1,38 @@
 <script setup lang="ts">
 import { ref, reactive } from "vue"
-import GanttChart from "@gantt/vue-gantt"
+import GanttChart, {
+  type GanttChartExpose,
+  type GanttLinkRejection,
+  type GanttMarkerEditRequest,
+  type GanttTaskEditRequest
+} from "@gantt/vue-gantt"
 import "../../packages/vue-gantt/src/styles/gantt.css"
-import type { GanttConfig, GanttLink, GanttMarker, GanttTask, PatchTask } from "@gantt/core"
+import type { CustomColumn, GanttConfig, GanttLink, GanttMarker, GanttTask, PatchTask } from "@gantt/core"
 import { createLargeDataset } from "./demos/basic/data"
+
+const defaultDemoColumns: CustomColumn[] = [
+  { key: "name", label: "任务名称", width: 200, editable: true },
+  { key: "owner", label: "负责人", width: 88, editable: true },
+  { key: "planStart", label: "计划开始", width: 92, type: "date", editable: true },
+  { key: "planEnd", label: "计划完成", width: 92, type: "date", editable: true },
+  { key: "actualStart", label: "实际开始", width: 92, type: "date", editable: true },
+  { key: "actualEnd", label: "实际完成", width: 92, type: "date", editable: true },
+  { key: "progress", label: "进度", width: 92, type: "number", editable: true },
+  {
+    key: "priority",
+    label: "优先级",
+    width: 78,
+    align: "center",
+    type: "select",
+    editable: true,
+    options: [
+      { label: "高", value: "high" },
+      { label: "中", value: "medium" },
+      { label: "低", value: "low" }
+    ]
+  },
+  { key: "risk", label: "风险", width: 70, align: "center", editable: true }
+]
 
 const demoConfig = reactive<Partial<GanttConfig>>({
   viewMode: "month",
@@ -11,17 +40,59 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   columnWidth: 34,
   headerHeight: 52,
   taskListWidth: 320,
+  locale: "zh-CN",
+  firstDayOfWeek: 1,
+  dateFormat: "YYYY-MM-DD",
+  columnWidths: {
+    day: 30,
+    week: 72,
+    month: 34,
+    quarter: 82,
+    year: 120
+  },
   showPlanBar: true,
   showActualBar: true,
+  editable: true,
   editablePlan: true,
   editableActual: true,
   enableLinkCreation: true,
+  showLinkRejectionNotice: true,
+  virtualScroll: true,
   autoSchedule: true,
-  columns: [
-    { key: "name", label: "任务名称", width: 200, editable: true },
-    { key: "planStart", label: "计划开始", width: 92, type: "date", editable: true },
-    { key: "planEnd", label: "计划完成", width: 92, type: "date", editable: true },
-    { key: "progress", label: "进度", width: 80, type: "number", editable: true }
+  taskColors: {
+    task: "#2563eb",
+    summary: "#475467",
+    milestone: "#d97706",
+    plan: "#cbd5e1",
+    progress: "#0f766e"
+  },
+  columns: defaultDemoColumns.map((column) => ({ ...column })),
+  editorFields: [
+    { key: "name", label: "名称", editable: true },
+    { key: "type", label: "类型", type: "select", editable: true },
+    { key: "parentId", label: "父级阶段", type: "select", editable: true },
+    { key: "planStart", label: "计划开始", type: "date", editable: true },
+    { key: "planEnd", label: "计划完成", type: "date", editable: true },
+    { key: "actualStart", label: "实际开始", type: "date", editable: true },
+    { key: "actualEnd", label: "实际完成", type: "date", editable: true },
+    { key: "progress", label: "进度", type: "number", editable: true },
+    { key: "resources", label: "负责人", editable: true },
+    { key: "calendarId", label: "日历 ID", editable: true },
+    { key: "schedulingMode", label: "排程方式", type: "select", editable: true },
+    { key: "color", label: "实际条颜色", editable: true },
+    { key: "planColor", label: "计划条颜色", editable: true },
+    {
+      key: "priority",
+      label: "优先级",
+      type: "select",
+      editable: true,
+      options: [
+        { label: "高", value: "high" },
+        { label: "中", value: "medium" },
+        { label: "低", value: "low" }
+      ]
+    },
+    { key: "risk", label: "风险", editable: true }
   ]
 })
 
@@ -29,11 +100,38 @@ type DemoDataMode = "basic" | "medium" | "large" | "huge" | "massive"
 
 const demoAllTasks = ref<GanttTask[]>(createLargeDataset(100))
 const demoDataMode = ref<DemoDataMode>("basic")
-const demoLinks = ref<GanttLink[]>([])
+const demoGanttRef = ref<GanttChartExpose>()
+const demoColumnPanelOpen = ref(false)
+const demoLinks = ref<GanttLink[]>([
+  { id: "demo-fs", sourceId: "group-1-module-1-task-1", targetId: "group-1-module-1-task-2", type: "FS", lag: 0, lagUnit: "calendar" },
+  { id: "demo-ss", sourceId: "group-1-module-1-task-2", targetId: "group-1-module-1-task-3", type: "SS", lag: 1, lagUnit: "working" }
+])
 const demoMarkers = ref<GanttMarker[]>([
   { id: "review", name: "方案评审", date: "2026-07-10", color: "#d97706" },
   { id: "launch", name: "一期上线", date: "2026-09-01", color: "#dc2626" }
 ])
+const demoViewOptions: Array<{ mode: GanttConfig["viewMode"]; label: string }> = [
+  { mode: "day", label: "周/日" },
+  { mode: "week", label: "年/周" },
+  { mode: "month", label: "年/月" },
+  { mode: "quarter", label: "年/季度" }
+]
+const demoColumnSettings = reactive(defaultDemoColumns.map((column) => ({
+  key: column.key,
+  label: column.label,
+  visible: column.visible !== false,
+  editable: column.editable !== false
+})))
+const demoColumnDrafts = reactive(defaultDemoColumns.map((column) => ({
+  key: column.key,
+  label: column.label,
+  visible: column.visible !== false,
+  editable: column.editable !== false
+})))
+async function saveDemoApi(resource: string, action: string, payload: unknown) {
+  console.info(`[demo api] ${resource}.${action}`, payload)
+  await Promise.resolve()
+}
 
 function mergeTaskPatch(task: GanttTask, patch: PatchTask): GanttTask {
   return {
@@ -54,42 +152,169 @@ function mergeTaskPatch(task: GanttTask, patch: PatchTask): GanttTask {
   }
 }
 
-function handleTaskChange(id: string, patch: PatchTask) {
+async function handleTaskChange(id: string, patch: PatchTask) {
   demoAllTasks.value = demoAllTasks.value.map((task) =>
     task.id === id ? mergeTaskPatch(task, patch) : task
   )
+  await saveDemoApi("task", "update", { id, patch })
 }
-function handleViewModeChange(mode: string) {
-  demoConfig.viewMode = mode as GanttConfig["viewMode"]
-}
-
-function handleTaskCreate(task: GanttTask) {
+async function handleTaskCreate(task: GanttTask) {
   demoAllTasks.value = [...demoAllTasks.value, task]
+  await saveDemoApi("task", "create", task)
 }
 
-function handleTaskDelete(id: string) {
+async function handleTaskDelete(id: string) {
   demoAllTasks.value = demoAllTasks.value.filter((t) => t.id !== id)
+  await saveDemoApi("task", "delete", { id })
 }
 
-function handleLinkChange(links: GanttLink[]) {
+async function handleLinkChange(links: GanttLink[]) {
   demoLinks.value = links
+  await saveDemoApi("link", "replaceAll", links)
 }
 
-function handleMarkerCreate(marker: GanttMarker) {
+async function handleMarkerCreate(marker: GanttMarker) {
   demoMarkers.value = [...demoMarkers.value, marker]
+  await saveDemoApi("marker", "create", marker)
 }
 
-function handleMarkerChange(id: string, marker: GanttMarker) {
+async function handleMarkerChange(id: string, marker: GanttMarker) {
   demoMarkers.value = demoMarkers.value.map((m) => (m.id === id ? marker : m))
+  await saveDemoApi("marker", "update", { id, marker })
 }
 
-function handleMarkerDelete(id: string) {
+async function handleMarkerDelete(id: string) {
   demoMarkers.value = demoMarkers.value.filter((m) => m.id !== id)
+  await saveDemoApi("marker", "delete", { id })
 }
 
 function useDemoDataset(mode: DemoDataMode, count: number) {
   demoDataMode.value = mode
   demoAllTasks.value = createLargeDataset(count)
+}
+
+function togglePlanBar() {
+  demoConfig.showPlanBar = !demoConfig.showPlanBar
+  void saveDemoApi("config", "togglePlanBar", { showPlanBar: demoConfig.showPlanBar })
+}
+
+function toggleActualBar() {
+  demoConfig.showActualBar = !demoConfig.showActualBar
+  void saveDemoApi("config", "toggleActualBar", { showActualBar: demoConfig.showActualBar })
+}
+
+function syncDemoColumnDrafts() {
+  for (const draft of demoColumnDrafts) {
+    const setting = demoColumnSettings.find((item) => item.key === draft.key)
+    draft.visible = setting?.visible ?? true
+    draft.editable = setting?.editable ?? true
+  }
+}
+
+function openDemoColumnPanel() {
+  syncDemoColumnDrafts()
+  demoColumnPanelOpen.value = true
+}
+
+function cancelDemoColumnPanel() {
+  syncDemoColumnDrafts()
+  demoColumnPanelOpen.value = false
+}
+
+function applyDemoColumns() {
+  for (const setting of demoColumnSettings) {
+    const draft = demoColumnDrafts.find((item) => item.key === setting.key)
+    setting.visible = draft?.visible ?? true
+    setting.editable = draft?.editable ?? true
+  }
+  demoConfig.columns = demoColumnSettings
+    .filter((setting) => setting.visible)
+    .map((setting) => {
+      const source = defaultDemoColumns.find((column) => column.key === setting.key)!
+      return { ...source, editable: setting.editable }
+    })
+  demoColumnPanelOpen.value = false
+  void saveDemoApi("config", "updateColumns", { columns: demoConfig.columns })
+}
+
+function updateDemoColumnVisible(key: string, checked: boolean) {
+  const draft = demoColumnDrafts.find((item) => item.key === key)
+  if (!draft) return
+  draft.visible = checked
+  if (!checked) {
+    draft.editable = false
+  }
+}
+
+function updateDemoColumnEditable(key: string, checked: boolean) {
+  const draft = demoColumnDrafts.find((item) => item.key === key)
+  if (!draft) return
+  draft.editable = checked
+  if (checked) {
+    draft.visible = true
+  }
+}
+
+function resetDemoColumns() {
+  for (const draft of demoColumnDrafts) {
+    const source = defaultDemoColumns.find((column) => column.key === draft.key)
+    draft.visible = source?.visible !== false
+    draft.editable = source?.editable !== false
+  }
+}
+
+function setDemoViewMode(mode: GanttConfig["viewMode"]) {
+  demoConfig.viewMode = mode
+  void saveDemoApi("view", "changeMode", { mode })
+}
+
+async function exportDemoImage() {
+  await demoGanttRef.value?.exportImage({ filename: "vue-gantt-demo.png" })
+}
+
+async function toggleDemoFullscreen() {
+  await demoGanttRef.value?.toggleFullscreen()
+}
+
+function createDemoTask() {
+  const id = `demo-task-${Date.now()}`
+  const task: GanttTask = {
+    id,
+    name: "新建任务",
+    type: "task",
+    parentId: "group-1-module-1",
+    plan: { start: "2026-07-16", end: "2026-07-20" },
+    actual: { start: "2026-07-16", end: "2026-07-20", progress: 0 },
+    resources: ["演示成员"],
+    color: "#2563eb",
+    planColor: "#bfdbfe",
+    custom: { priority: "medium", risk: "低" }
+  }
+  demoAllTasks.value = [...demoAllTasks.value, task]
+  void saveDemoApi("task", "create", task)
+}
+
+function createDemoMarker() {
+  const marker: GanttMarker = {
+    id: `demo-marker-${Date.now()}`,
+    name: "新建里程碑",
+    date: "2026-07-22",
+    color: "#d97706"
+  }
+  demoMarkers.value = [...demoMarkers.value, marker]
+  void saveDemoApi("marker", "create", marker)
+}
+
+function handleTaskEditRequest(request: GanttTaskEditRequest) {
+  console.info("task-edit-request", request)
+}
+
+function handleMarkerEditRequest(request: GanttMarkerEditRequest) {
+  console.info("marker-edit-request", request)
+}
+
+function handleLinkRejected(rejection: GanttLinkRejection) {
+  console.warn("link-rejected", rejection.message)
 }
 
 const mobileNavOpen = ref(false)
@@ -160,6 +385,7 @@ const configCode = `const ganttConfig: Partial<GanttConfig> = {
   // 展示与交互控制
   showPlanBar: true,               // 是否显示计划条
   showActualBar: true,             // 是否显示实际条
+  showTimelineWhenEmpty: false,     // 数据为空时是否仍展示右侧日期轴和网格
   editablePlan: true,              // 计划条是否允许拖拽和拉伸
   editableActual: true,            // 实际条是否允许拖拽和拉伸
   enableLinkCreation: true,        // 是否允许创建任务依赖
@@ -353,8 +579,9 @@ const configRows = [
   ["customColumns", "CustomColumn[]", "[]", "在内置列后追加自定义列。"],
   ["editorFields", "GanttEditorField[]", "内置字段", "控制任务编辑抽屉的字段。"],
   ["editable", "boolean", "true", "总编辑开关，关闭后任务条不可拖拽编辑。"],
-  ["showPlanBar", "boolean", "true", "是否显示计划条。"],
+  ["showPlanBar", "boolean", "true", "是否显示计划条；关闭后依赖线和依赖创建入口会同步隐藏。"],
   ["showActualBar", "boolean", "true", "是否显示实际条。"],
+  ["showTimelineWhenEmpty", "boolean", "false", "任务数据为空时是否仍展示右侧日期轴、网格和里程碑；左侧表格不展示。"],
   ["editablePlan", "boolean", "false", "计划条是否可拖拽、拉伸。"],
   ["editableActual", "boolean", "true", "实际条是否可拖拽、拉伸。"],
   ["enableLinkCreation", "boolean", "true", "是否允许创建依赖。"],
@@ -362,7 +589,7 @@ const configRows = [
   ["builtInTaskEditor", "boolean", "true", "是否使用内置任务抽屉。"],
   ["builtInMarkerEditor", "boolean", "true", "是否使用内置里程碑弹窗。"],
   ["virtualScroll", "boolean", "true", "是否启用纵向虚拟滚动。"],
-  ["autoSchedule", "boolean", "true", "拖动计划条时是否按依赖联动排程。"],
+  ["autoSchedule", "boolean", "true", "拖动计划条时是否按依赖联动排程；实际条不受依赖自动排程影响。"],
   ["taskColors", "object", "内置色值", "任务条、阶段条、里程碑、计划条默认颜色。"]
 ]
 
@@ -452,8 +679,7 @@ const eventRows = [
   ["marker-delete", "(id)", "删除里程碑时触发。"],
   ["marker-edit-request", "(request)", "builtInMarkerEditor 为 false 时，请求业务侧打开外部里程碑编辑器。"],
   ["link-change", "(links)", "新增、编辑、删除依赖时触发。"],
-  ["link-rejected", "(rejection)", "重复、自连或循环依赖被拒绝时触发。"],
-  ["view-mode-change", "(mode)", "切换时间刻度时触发。"]
+  ["link-rejected", "(rejection)", "重复、自连、循环依赖被拒绝，或计划条拖拽被依赖约束限制时触发。"]
 ]
 
 const patchRows = [
@@ -483,7 +709,7 @@ const markerRequestRows = [
 ]
 
 const linkRejectionRows = [
-  ["reason", "duplicate | cycle | self", "拒绝原因：重复、循环依赖或自连。"],
+  ["reason", "duplicate | cycle | self | constraint", "拒绝/限制原因：重复、循环依赖、自连或依赖约束限制。"],
   ["sourceId", "string", "前置任务 ID。"],
   ["targetId", "string", "后置任务 ID。"],
   ["message", "string", "可直接展示给用户的提示文案。"]
@@ -518,7 +744,7 @@ const coreRows = [
   ["flattenTasks(tasks, collapsedIds?)", "展开阶段树，生成可渲染行，支持父子孙多级结构。"],
   ["normalizeLinks(tasks, standaloneLinks?)", "标准化依赖，合并 task.dependencies 和 links，并过滤无效关系。"],
   ["checkCyclicDependency(links)", "检测依赖是否产生循环。"],
-  ["scheduleByDependencies(tasks, links)", "按 FS / SS / FF / SF 依赖进行排程，返回 Result<GanttTask[]>。"],
+  ["scheduleByDependencies(tasks, links)", "Core 独立排程工具：按 FS / SS / FF / SF 依赖调整任务时间，返回 Result<GanttTask[]>。"],
   ["computeImpact(taskId, patch, tasks, links, config)", "计算一次任务变更影响到的后续任务和约束冲突。"],
   ["shiftTask(task, start)", "按新开始日期整体平移任务实际时间。"],
   ["toDate / formatDate / addDays / diffDays / inclusiveDays / isValidDate", "日期工具方法。"]
@@ -541,33 +767,114 @@ function closeMobileNav() {
 
 <template>
   <div class="docs-page">
-    <section class="gantt-demo-hero">
+    <section class="gantt-demo-hero" data-gantt-fullscreen-root>
       <div class="gantt-demo-header">
-        <h1>Vue Gantt 交互演示</h1>
-        <p>拖拽条图可调整计划/实际时间 · 双击任务打开编辑器 · 连接任务创建依赖关系</p>
-        <div class="gantt-demo-tools" aria-label="演示数据">
+        <div class="gantt-demo-tools" aria-label="演示控制">
+          <div class="demo-tool-group demo-tool-main">
+          <div class="demo-chart-title">
+            <strong>项目甘特图</strong>
+            <span>{{ demoAllTasks.length }} 个任务</span>
+          </div>
+          <div class="demo-chart-legend" aria-label="时间条图例">
+            <span><i class="plan"></i>计划</span>
+            <span><i class="actual"></i>实际</span>
+          </div>
+          <fieldset class="demo-view-options" aria-label="时间刻度">
+            <label v-for="option in demoViewOptions" :key="option.mode">
+              <input
+                type="radio"
+                name="demo-view-mode"
+                :value="option.mode"
+                :checked="demoConfig.viewMode === option.mode"
+                @change="setDemoViewMode(option.mode)"
+              >
+              <span>{{ option.label }}</span>
+            </label>
+          </fieldset>
+          </div>
+          <div class="demo-tool-group demo-tool-datasets">
+          <span class="demo-tool-label">数据与显示</span>
           <button type="button" :class="{ active: demoDataMode === 'basic' }" @click="useDemoDataset('basic', 100)">基础数据（100条）</button>
           <button type="button" :class="{ active: demoDataMode === 'medium' }" @click="useDemoDataset('medium', 1000)">中等数据（1000条）</button>
           <button type="button" :class="{ active: demoDataMode === 'large' }" @click="useDemoDataset('large', 3200)">大量数据（3200条）</button>
           <button type="button" :class="{ active: demoDataMode === 'huge' }" @click="useDemoDataset('huge', 5200)">超多数据（5200条）</button>
-          <button type="button" :class="{ active: demoDataMode === 'massive' }" @click="useDemoDataset('massive', 10000)">万条数据（10000条）</button>
+          <button type="button" :class="{ active: demoDataMode === 'massive' }" @click="useDemoDataset('massive', 10000)">方案数据（10000条）</button>
+          <button type="button" :class="{ active: demoConfig.showPlanBar !== false }" @click="togglePlanBar">计划条</button>
+          <button type="button" :class="{ active: demoConfig.showActualBar !== false }" @click="toggleActualBar">实际条</button>
+          <div class="demo-column-config">
+            <button type="button" :class="{ active: demoColumnPanelOpen }" @click="demoColumnPanelOpen ? cancelDemoColumnPanel() : openDemoColumnPanel()">自定义列</button>
+            <div v-if="demoColumnPanelOpen" class="demo-column-panel">
+              <div class="demo-column-panel-head">
+                <strong>列配置</strong>
+                <button type="button" @click="resetDemoColumns">重置</button>
+              </div>
+              <div class="demo-column-row demo-column-row-title">
+                <span>字段</span>
+                <span>展示</span>
+                <span>可编辑</span>
+              </div>
+              <div v-for="column in demoColumnDrafts" :key="column.key" class="demo-column-row">
+                <span>{{ column.label }}</span>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="column.visible"
+                    @change="updateDemoColumnVisible(column.key, ($event.target as HTMLInputElement).checked)"
+                  >
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="column.editable"
+                    :disabled="!column.visible"
+                    @change="updateDemoColumnEditable(column.key, ($event.target as HTMLInputElement).checked)"
+                  >
+                </label>
+              </div>
+              <div class="demo-column-panel-footer">
+                <button type="button" @click="cancelDemoColumnPanel">取消</button>
+                <button type="button" class="primary" @click="applyDemoColumns">保存</button>
+              </div>
+            </div>
+          </div>
+          </div>
+          <div class="demo-chart-actions">
+            <span class="demo-tool-label">操作</span>
+            <button type="button" class="quiet" disabled>编辑</button>
+            <button type="button" class="quiet" @click="exportDemoImage">导出图片</button>
+            <button type="button" class="quiet" @click="toggleDemoFullscreen">全屏</button>
+            <button type="button" class="primary" @click="createDemoTask">新建任务</button>
+            <button type="button" class="secondary" @click="createDemoMarker">新建里程碑</button>
+          </div>
         </div>
       </div>
      <GanttChart
+       ref="demoGanttRef"
        :tasks="demoAllTasks"
        :links="demoLinks"
        :markers="demoMarkers"
        :config="demoConfig"
        height="540px"
         @task-change="handleTaskChange"
-        @view-mode-change="handleViewModeChange"
         @task-create="handleTaskCreate"
         @task-delete="handleTaskDelete"
+        @task-edit-request="handleTaskEditRequest"
         @link-change="handleLinkChange"
+        @link-rejected="handleLinkRejected"
         @marker-create="handleMarkerCreate"
         @marker-change="handleMarkerChange"
         @marker-delete="handleMarkerDelete"
-      />
+        @marker-edit-request="handleMarkerEditRequest"
+      >
+        <template #cell-priority="{ value }">
+          <span class="demo-priority" :class="`level-${value || 'medium'}`">
+            {{ value === "high" ? "高" : value === "low" ? "低" : "中" }}
+          </span>
+        </template>
+        <template #cell-risk="{ value }">
+          <span class="demo-risk" :class="{ danger: value === '高' }">{{ value || "低" }}</span>
+        </template>
+      </GanttChart>
     </section>
     <header class="docs-header">
       <button
@@ -854,7 +1161,12 @@ function closeMobileNav() {
         <h1>1.12. 使用注意事项</h1>
         <ul>
           <li>任务依赖只允许计划条建立，实际条不参与依赖关系。</li>
+          <li>关闭 <code>showPlanBar</code> 后，计划条、依赖线和依赖创建入口会一起隐藏。</li>
+          <li>组件内的依赖自动排程只作用于计划条；实际条代表真实执行记录，拖拽实际条不会联动依赖任务。</li>
+          <li>如果希望空数据时仍展示日期轴和网格，可开启 <code>showTimelineWhenEmpty</code>；此时左侧表格、任务条和实际条不会展示。</li>
           <li>同一个前置任务和后置任务之间只能保留一条依赖线。</li>
+          <li>计划条被依赖约束限制时会触发 <code>link-rejected</code>，其中 <code>reason</code> 为 <code>constraint</code>。</li>
+          <li>里程碑当前按日期固定展示在时间轴上，不随表格滚动，也不支持上下自由拖拽；如需特殊位置样式，建议通过里程碑编辑器或自定义样式扩展。</li>
           <li>计划条颜色由 <code>planColor</code> 控制，实际条颜色由 <code>color</code> 控制，两者互不跟随。</li>
           <li>左侧自定义列如果需要参与编辑，请同时设置 <code>editable</code>、<code>type</code> 和必要的 <code>options</code>。</li>
           <li>如果不需要内置弹窗，可关闭 <code>builtInTaskEditor</code> 或使用对应插槽完全替换。</li>

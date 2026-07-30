@@ -1,7 +1,7 @@
 import { mount } from "@vue/test-utils"
 import { h, nextTick } from "vue"
 import { describe, expect, it, vi } from "vitest"
-import type { GanttMarker, GanttTask, PatchTask } from "@gantt/core"
+import type { GanttLink, GanttMarker, GanttTask, PatchTask } from "@gantt/core"
 import GanttChart from "../src/components/GanttChart.vue"
 import { buildOrthogonalLinkPath, drawLinks } from "../src/rendering/canvas/links"
 
@@ -55,6 +55,35 @@ function dateKey(value: string | Date | undefined) {
 }
 
 describe("GanttChart", () => {
+  it("can render the timeline without task rows when tasks are empty", () => {
+    const defaultEmpty = mount(GanttChart, {
+      props: {
+        tasks: [],
+        config: { viewMode: "day", visibleRange: { start: "2026-07-01", end: "2026-07-10" } }
+      }
+    })
+    expect(defaultEmpty.find(".gantt-empty").exists()).toBe(true)
+    expect(defaultEmpty.find(".gantt-timeline").exists()).toBe(false)
+
+    const timelineEmpty = mount(GanttChart, {
+      props: {
+        tasks: [],
+        config: {
+          viewMode: "day",
+          showTimelineWhenEmpty: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-10" }
+        }
+      }
+    })
+    expect(timelineEmpty.find(".gantt-empty").exists()).toBe(false)
+    expect(timelineEmpty.find(".gantt-table").exists()).toBe(false)
+    expect(timelineEmpty.find(".gantt-splitter").exists()).toBe(false)
+    expect(timelineEmpty.find(".gantt-timeline").exists()).toBe(true)
+    expect(timelineEmpty.find(".gantt-scale").exists()).toBe(true)
+    expect(timelineEmpty.findAll(".gantt-bar")).toHaveLength(0)
+    expect(timelineEmpty.findAll(".gantt-plan-bar")).toHaveLength(0)
+  })
+
   it("exposes the image export api", () => {
     const wrapper = mount(GanttChart, {
       props: {
@@ -127,10 +156,10 @@ describe("GanttChart", () => {
 
     expect(path).toEqual([
       { x: 45, y: 40 },
-      { x: 27, y: 40 },
-      { x: 27, y: 61 },
-      { x: 303, y: 61 },
-      { x: 303, y: 82 },
+      { x: 21, y: 40 },
+      { x: 21, y: 61 },
+      { x: 309, y: 61 },
+      { x: 309, y: 82 },
       { x: 285, y: 82 }
     ])
     expect(path[4].x).toBeGreaterThan(path[5].x)
@@ -169,15 +198,13 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-bar.summary .gantt-link-handle").exists()).toBe(false)
     expect(wrapper.find(".gantt-plan-bar.task").attributes("title")).toBeUndefined()
     expect(wrapper.find(".gantt-bar.task").attributes("title")).toBeUndefined()
-    expect(wrapper.find(".gantt-legend").text().length).toBeGreaterThan(0)
-    expect(wrapper.findAll(".gantt-legend span").length).toBeGreaterThan(0)
-    expect(wrapper.find(".gantt-actions .primary").text().length).toBeGreaterThan(0)
+    expect(wrapper.find(".gantt-legend").exists()).toBe(false)
+    expect(wrapper.find(".gantt-actions").exists()).toBe(false)
     expect(wrapper.find(".gantt-table-scroll > .gantt-table-head").exists()).toBe(true)
     expect(wrapper.find(".gantt-table-head").attributes("style")).not.toContain("transform")
     expect(wrapper.findAll(".gantt-row")[0].classes()).toContain("summary-row")
     expect(wrapper.findAll(".gantt-name")[1].classes()).toContain("child")
-    expect(wrapper.find(".gantt-scale-options").text().length).toBeGreaterThan(0)
-    expect(wrapper.findAll(".gantt-scale-options input")).toHaveLength(4)
+    expect(wrapper.find(".gantt-scale-options").exists()).toBe(false)
     expect(wrapper.find(".gantt-month").text()).toBe("2026-06-28")
     expect(wrapper.find(".gantt-tick").text()).toBe("28")
   })
@@ -857,13 +884,23 @@ describe("GanttChart", () => {
   })
 
   it("controls plan and actual visibility and drag permissions independently", async () => {
+    const links: GanttLink[] = [{
+      id: "task-link",
+      sourceId: "summary",
+      targetId: "task-1",
+      type: "FS",
+      lag: 0,
+      lagUnit: "calendar"
+    }]
     const hiddenPlan = mount(GanttChart, {
       props: {
         tasks,
+        links,
         config: { viewMode: "day", showPlanBar: false }
       }
     })
     expect(hiddenPlan.find(".gantt-plan-bar").exists()).toBe(false)
+    expect(hiddenPlan.find(".gantt-link-layer").exists()).toBe(false)
     expect(hiddenPlan.find(".gantt-bar").exists()).toBe(true)
 
     const editablePlan = mount(GanttChart, {
@@ -895,6 +932,89 @@ describe("GanttChart", () => {
     await actualTaskBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
     await actualTaskBar.trigger("pointerup", { clientX: 160, pointerId: 1 })
     expect(lockedActual.emitted("taskChange")).toBeUndefined()
+  })
+
+  it("does not auto-schedule actual bars from task dependencies in the Vue chart", () => {
+    const dependentTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-02", end: "2026-07-04" },
+        actual: { start: "2026-07-02", end: "2026-07-04", progress: 20 },
+        dependencies: [{
+          id: "source-target",
+          predecessorId: "source",
+          type: "FS",
+          lag: 0,
+          lagUnit: "calendar"
+        }]
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: dependentTasks,
+        config: {
+          viewMode: "day",
+          columnWidth: 20,
+          autoSchedule: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+    const targetBar = wrapper.findAll(".gantt-bar.task")[1]
+
+    expect(targetBar.attributes("style")).toContain("translate(80px")
+    expect(targetBar.attributes("style")).not.toContain("translate(160px")
+  })
+
+  it("notifies when plan dragging is limited by dependency constraints", async () => {
+    const linkedTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-06", end: "2026-07-08" },
+        actual: { start: "2026-07-06", end: "2026-07-08", progress: 20 }
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "FS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          editablePlan: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+
+    const targetPlanBar = wrapper.findAll(".gantt-plan-bar.task")[1]
+    await targetPlanBar.trigger("pointerdown", { clientX: 100, pointerId: 1 })
+    await targetPlanBar.trigger("pointerup", { clientX: 40, pointerId: 1 })
+
+    expect(wrapper.emitted("linkRejected")?.[0]?.[0]).toMatchObject({
+      reason: "constraint",
+      sourceId: "source",
+      targetId: "target"
+    })
+    expect(wrapper.emitted("taskChange")).toBeUndefined()
   })
 
   it("keeps plan and actual bar colors independent", () => {
@@ -967,8 +1087,8 @@ describe("GanttChart", () => {
       }
     })
 
-    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 7px\)/)
-    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 23px\)/)
+    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 5px\)/)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 25px\)/)
     const milestone = wrapper.find(".gantt-bar.milestone")
     expect(milestone.exists()).toBe(true)
     expect(milestone.attributes("style")).toMatch(/translate\([^,]+, 0px\)/)
@@ -1239,49 +1359,31 @@ describe("GanttChart", () => {
     expect(wrapper.find(".gantt-chevron").classes()).not.toContain("collapsed")
   })
 
-  it("emits view mode changes", async () => {
-    const onViewModeChange = vi.fn()
+  it("uses the configured view mode without rendering built-in view controls", async () => {
     const wrapper = mount(GanttChart, {
       props: {
         tasks,
         markers,
-        config: { viewMode: "day" },
-        onViewModeChange
+        config: { viewMode: "day" }
       }
     })
 
-    await wrapper.findAll(".gantt-scale-options input")[2].trigger("change")
-    expect(wrapper.emitted("viewModeChange")).toBeTruthy()
-    expect(onViewModeChange).toHaveBeenCalledWith("month")
-    expect(onViewModeChange).toHaveBeenCalledTimes(1)
+    expect(wrapper.find(".gantt-scale-options").exists()).toBe(false)
+    expect(wrapper.find(".gantt-tick").exists()).toBe(true)
   })
 
-  it("creates milestone markers from the toolbar", async () => {
-    const onMarkerCreate = vi.fn()
+  it("does not render demo toolbar controls in the core chart", () => {
     const wrapper = mount(GanttChart, {
       props: {
         tasks,
         markers,
-        config: { viewMode: "day" },
-        onMarkerCreate
+        config: { viewMode: "day" }
       }
     })
 
-    const markerButton = wrapper.findAll(".gantt-actions button").find((button) => button.text() === "新建里程碑")
-    expect(markerButton).toBeTruthy()
-    await markerButton!.trigger("click")
-    expect(wrapper.find(".gantt-task-drawer").exists()).toBe(false)
-    expect(wrapper.find(".gantt-editor").exists()).toBe(true)
-    expect(wrapper.findAll(".gantt-color-swatch")).toHaveLength(8)
-    await wrapper.find(".gantt-color-swatch[aria-label='选择颜色 #10b981']").trigger("click")
-    await wrapper.find(".gantt-editor button.primary").trigger("click")
-
-    const created = wrapper.emitted("markerCreate")?.[0]?.[0] as GanttMarker
-    expect(created.name).toBeTruthy()
-    expect(created.date).toBeTruthy()
-    expect(created.color).toBe("#10b981")
-    expect(wrapper.emitted("markerCreate")).toHaveLength(1)
-    expect(onMarkerCreate).toHaveBeenCalledTimes(1)
+    expect(wrapper.find(".gantt-toolbar").exists()).toBe(false)
+    expect(wrapper.find(".gantt-actions").exists()).toBe(false)
+    expect(wrapper.find(".gantt-scale-options").exists()).toBe(false)
   })
 
   it("keeps colors independent for markers on the same date", async () => {
@@ -1597,6 +1699,41 @@ describe("GanttChart", () => {
     ])
   })
 
+  it("expands table columns to fill the resized task list width", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        config: {
+          viewMode: "day",
+          taskListWidth: 660,
+          columns: [
+            { key: "name", label: "Task", width: 180, align: "left" },
+            { key: "planStart", label: "Plan", width: 90 },
+            { key: "progress", label: "Progress", width: 90 }
+          ]
+        }
+      }
+    })
+
+    const tableHeadStyle = wrapper.find(".gantt-table-head").attributes("style")
+    expect(tableHeadStyle).toContain("width: 660px")
+    expect(tableHeadStyle).toContain("330px 165px 165px")
+
+    await wrapper.setProps({
+      config: {
+        viewMode: "day",
+        taskListWidth: 260,
+        columns: [
+          { key: "name", label: "Task", width: 180, align: "left" },
+          { key: "planStart", label: "Plan", width: 90 },
+          { key: "progress", label: "Progress", width: 90 }
+        ]
+      }
+    })
+    expect(wrapper.find(".gantt-table-head").attributes("style")).toContain("width: 360px")
+    expect(wrapper.find(".gantt-table-head").attributes("style")).toContain("180px 90px 90px")
+  })
+
   it("keeps the selected task row highlighted across the table and timeline", async () => {
     const wrapper = mount(GanttChart, {
       props: {
@@ -1686,8 +1823,8 @@ describe("GanttChart", () => {
       }
     })
 
-    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 5px\)/)
-    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 21px\)/)
+    expect(wrapper.find(".gantt-plan-bar.task").attributes("style")).toMatch(/translate\([^,]+, 3px\)/)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toMatch(/translate\([^,]+, 23px\)/)
     expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("height: 14px")
   })
 })

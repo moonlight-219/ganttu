@@ -201,6 +201,10 @@
   flex: 1;
 }
 
+.gantt-main.empty-timeline .gantt-timeline {
+  border-left: 0;
+}
+
 .gantt-table {
   flex: 0 0 auto;
   overflow: hidden;
@@ -635,7 +639,7 @@ body.gantt-dialog-open {
 }
 
 .gantt-link-layer {
-  z-index: 5;
+  z-index: 2;
   overflow: visible;
   pointer-events: none;
 }
@@ -664,7 +668,7 @@ body.gantt-dialog-open {
   stroke: transparent;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 12;
+  stroke-width: 8;
   cursor: pointer;
   pointer-events: stroke;
 }
@@ -835,10 +839,23 @@ body.gantt-dialog-open {
 }
 
 .gantt-chart .gantt-plan-bar.summary {
-  height: 10px;
+  height: 8px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--bar-color), black 8%);
+  border: 1px solid color-mix(in srgb, var(--bar-color), white 12%);
   cursor: default;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--bar-color), white 24%) 0,
+      color-mix(in srgb, var(--bar-color), white 24%) 6px,
+      color-mix(in srgb, var(--bar-color), white 44%) 6px,
+      color-mix(in srgb, var(--bar-color), white 44%) 12px
+    );
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36);
+}
+
+.gantt-chart .gantt-plan-bar.summary .gantt-plan-progress {
+  display: none;
 }
 
 .gantt-plan-resize {
@@ -909,11 +926,66 @@ body.gantt-dialog-open {
 }
 
 .gantt-chart .gantt-bar.summary {
-  height: 8px;
+  height: 12px !important;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--bar-color), black 8%);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   cursor: default;
+}
+
+.gantt-summary-line {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bar-color), white 4%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+  transform: translateY(-50%);
+}
+
+.gantt-summary-overdue-line {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--overdue-color), white 2%);
+  box-shadow: 0 1px 2px rgba(220, 38, 38, 0.24);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.gantt-summary-cap {
+  position: absolute;
+  z-index: 2;
+  bottom: 0;
+  width: 8px;
+  height: 12px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bar-color), black 2%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
+}
+
+.gantt-summary-cap.start {
+  left: 0;
+}
+
+.gantt-summary-cap.end {
+  right: 0;
+}
+
+.gantt-plan-bar.summary .gantt-summary-cap {
+  bottom: -2px;
+  width: 6px;
+  height: 12px;
+  border: 1px solid color-mix(in srgb, var(--bar-color), white 15%);
+  background: color-mix(in srgb, var(--bar-color), white 30%);
 }
 
 .gantt-bar.milestone {
@@ -933,6 +1005,18 @@ body.gantt-dialog-open {
 
 .gantt-bar.overdue:not(.milestone) {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+}
+
+.gantt-chart .gantt-bar.summary.overdue {
+  box-shadow: none;
+}
+
+.gantt-chart .gantt-bar.summary.overdue .gantt-summary-cap.end {
+  background: color-mix(in srgb, var(--overdue-color), white 2%);
+}
+
+.gantt-chart .gantt-bar.summary .gantt-overdue-segment {
+  display: none;
 }
 
 .gantt-bar.dragging .gantt-link-handle,
@@ -1041,9 +1125,7 @@ body.gantt-dialog-open {
   border-radius: 5px;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--bar-color), white 22%), var(--bar-color));
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--bar-color), black 18%),
-    0 6px 14px rgba(15, 23, 42, 0.22);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bar-color), black 18%);
   transform: rotate(45deg);
   transform-origin: center;
   translate: -50% -50%;
@@ -1057,10 +1139,7 @@ body.gantt-dialog-open {
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(to bottom, var(--bar-color), color-mix(in srgb, var(--bar-color), white 40%));
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.9),
-    0 0 0 2px color-mix(in srgb, var(--bar-color), white 55%),
-    0 1px 2px rgba(15, 23, 42, 0.18);
+  box-shadow: none;
   translate: -50% 0;
 }
 
@@ -1073,7 +1152,7 @@ body.gantt-dialog-open {
   padding: 0 8px 0 9px;
   border-radius: 4px 7px 7px 4px;
   background: var(--bar-color);
-  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.18);
+  box-shadow: none;
   color: #ffffff;
   font-size: 11px;
   font-weight: 800;
@@ -1118,7 +1197,7 @@ body.gantt-dialog-open {
   border-left: 3px solid var(--bar-color);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  box-shadow: none;
   color: #344054;
   transform: translateY(-50%);
   pointer-events: none;

@@ -35,7 +35,7 @@ export function buildOrthogonalLinkPath(
   sourceAnchor: LinkAnchor,
   targetAnchor: LinkAnchor
 ): LinkPoint[] {
-  const gap = 18
+  const gap = 24
   const sourceDirection = sourceAnchor === "start" ? -1 : 1
   const targetDirection = targetAnchor === "start" ? -1 : 1
   const exitX = start.x + sourceDirection * gap

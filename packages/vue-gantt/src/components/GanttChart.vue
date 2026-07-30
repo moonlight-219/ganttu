@@ -52,7 +52,6 @@ const props = withDefaults(defineProps<{
   onMarkerEditRequest?: (request: GanttMarkerEditRequest) => void
   onLinkChange?: (links: GanttLink[]) => void
   onLinkRejected?: (rejection: GanttLinkRejection) => void
-  onViewModeChange?: (mode: ViewMode) => void
 }>(), {
   links: () => [],
   markers: () => []
@@ -69,7 +68,6 @@ const emit = defineEmits<{
   markerEditRequest: [request: GanttMarkerEditRequest]
   linkChange: [links: GanttLink[]]
   linkRejected: [rejection: GanttLinkRejection]
-  viewModeChange: [mode: ViewMode]
 }>()
 
 const viewOptions: Array<{ mode: ViewMode; label: string }> = [
@@ -80,7 +78,8 @@ const viewOptions: Array<{ mode: ViewMode; label: string }> = [
 ]
 const PLAN_BAR_HEIGHT = 12
 const ACTUAL_BAR_HEIGHT = 14
-const BAR_VERTICAL_GAP = 4
+const BAR_VERTICAL_GAP = 8
+const MIN_TABLE_COLUMN_WIDTH = 48
 const editorColorOptions = [
   "#2563eb",
   "#8b5cf6",
@@ -226,11 +225,33 @@ const tableColumns = computed(() => {
     : [...defaultColumns, ...(mergedConfig.value.customColumns ?? [])]
   return configured.filter((column) => column.visible !== false)
 })
-const tableGridTemplate = computed(() => tableColumns.value
-  .map((column) => `${Math.max(48, column.width ?? 100)}px`)
+const tableColumnWidths = computed(() => {
+  const baseColumns = tableColumns.value.map((column) => ({
+    column,
+    width: Math.max(MIN_TABLE_COLUMN_WIDTH, column.width ?? 100)
+  }))
+  const baseWidth = baseColumns.reduce((width, item) => width + item.width, 0)
+  const availableWidth = Math.max(0, taskListWidth.value)
+  if (!baseColumns.length || baseWidth >= availableWidth) return baseColumns
+
+  const extraWidth = availableWidth - baseWidth
+  let distributedWidth = 0
+  return baseColumns.map((item, index) => {
+    const addedWidth = index === baseColumns.length - 1
+      ? extraWidth - distributedWidth
+      : Math.floor(extraWidth * (item.width / baseWidth))
+    distributedWidth += addedWidth
+    return {
+      column: item.column,
+      width: item.width + addedWidth
+    }
+  })
+})
+const tableGridTemplate = computed(() => tableColumnWidths.value
+  .map(({ width }) => `${width}px`)
   .join(" "))
-const tableContentWidth = computed(() => tableColumns.value
-  .reduce((width, column) => width + Math.max(48, column.width ?? 100), 0))
+const tableContentWidth = computed(() => tableColumnWidths.value
+  .reduce((width, item) => width + item.width, 0))
 const baseDisplayedTasks = computed(() => rollupSummaryTasks(props.tasks))
 const displayedTasks = computed(() => rollupSummaryTasks(
   props.tasks.map((task) => applyPreviewPatchToTask(task))
@@ -298,7 +319,14 @@ const scale = computed<TimeScale[]>(() => computeTimeScale(
   mergedConfig.value.firstDayOfWeek
 ))
 const totalWidth = computed(() => scale.value.reduce((sum, tick) => sum + tick.width, 0))
-const totalHeight = computed(() => mergedConfig.value.headerHeight + flatTasks.value.length * mergedConfig.value.rowHeight)
+const totalHeight = computed(() => {
+  const bodyHeight = flatTasks.value.length
+    ? flatTasks.value.length * mergedConfig.value.rowHeight
+    : mergedConfig.value.showTimelineWhenEmpty
+      ? viewportHeight.value
+      : 0
+  return mergedConfig.value.headerHeight + bodyHeight
+})
 const viewportHeight = computed(() => {
   const fallbackHeight = Number.isFinite(Number.parseFloat(chartHeight.value)) ? Number.parseFloat(chartHeight.value) : 0
   const measuredHeight = viewportSize.value.height
@@ -355,10 +383,18 @@ const layoutConfig = computed<GanttConfig>(() => ({
     end: dateRange.value.end
   }
 }))
+const renderTasks = computed<GanttTask[]>(() => dependencyTasks.value.map((task) => ({
+  ...task,
+  dependencies: []
+})))
+const renderLayoutConfig = computed<GanttConfig>(() => ({
+  ...layoutConfig.value,
+  autoSchedule: false
+}))
 const layoutResult = computed(() => computeLayout(
-  dependencyTasks.value,
+  renderTasks.value,
   [],
-  layoutConfig.value,
+  renderLayoutConfig.value,
   collapsedIds.value,
   mergedConfig.value.virtualScroll === false
     ? undefined
@@ -388,6 +424,7 @@ const renderedLayouts = computed<TaskLayout[]>(() => [
 ])
 const layoutById = computed(() => new Map(renderedLayouts.value.map((layout) => [layout.taskId, layout])))
 const visibleRows = computed(() => flatTasks.value.slice(visibleWindow.value.start, visibleWindow.value.end + 1))
+const shouldShowEmptyTimeline = computed(() => !props.tasks.length && mergedConfig.value.showTimelineWhenEmpty === true)
 
 function barVerticalMetrics() {
   const outerGap = Math.max(
@@ -407,6 +444,9 @@ function barVerticalMetrics() {
 
 const selectedLink = computed(() => selectedLinkId.value ? normalizedLinks.value.find((link) => link.id === selectedLinkId.value) ?? null : null)
 const linkOverlayItems = computed(() => {
+  if (mergedConfig.value.showPlanBar === false) {
+    return []
+  }
   return normalizedLinks.value.flatMap((link) => {
     const sourceLayout = layoutById.value.get(link.sourceId)
     const targetLayout = layoutById.value.get(link.targetId)
@@ -604,7 +644,7 @@ onBeforeUnmount(() => {
 })
 
 function syncFullscreenState() {
-  isFullscreen.value = document.fullscreenElement === chartRef.value
+  isFullscreen.value = document.fullscreenElement === fullscreenElement()
   requestAnimationFrame(() => {
     updateViewportSize()
     drawCanvas()
@@ -856,10 +896,6 @@ function normalizedCustomDraft(): Record<string, unknown> {
     }
   }
   return custom
-}
-
-function setViewMode(viewMode: ViewMode) {
-  emit("viewModeChange", viewMode)
 }
 
 function taskEditRequest(task?: GanttTask): GanttTaskEditRequest {
@@ -1268,7 +1304,10 @@ function rejectLink(reason: GanttLinkRejection["reason"], sourceId: string, targ
     : reason === "cycle"
       ? "无法创建会形成循环的依赖关系"
       : "任务不能与自身建立依赖关系"
-  const rejection: GanttLinkRejection = { reason, sourceId, targetId, message }
+  showDependencyNotice({ reason, sourceId, targetId, message })
+}
+
+function showDependencyNotice(rejection: GanttLinkRejection) {
   linkNotice.value = rejection
   emit("linkRejected", rejection)
   if (linkNoticeTimer) {
@@ -1278,6 +1317,36 @@ function rejectLink(reason: GanttLinkRejection["reason"], sourceId: string, targ
     linkNotice.value = null
     linkNoticeTimer = 0
   }, 2600)
+}
+
+function planPatchTime(task: GanttTask, patch: PatchTask, key: "planStart" | "planEnd") {
+  const fallback = key === "planStart" ? task.plan.start : task.plan.end
+  return toDate(patch[key] ?? fallback).getTime()
+}
+
+function didClampPlanPatch(task: GanttTask, requested: PatchTask, clamped: PatchTask) {
+  return planPatchTime(task, requested, "planStart") !== planPatchTime(task, clamped, "planStart")
+    || planPatchTime(task, requested, "planEnd") !== planPatchTime(task, clamped, "planEnd")
+}
+
+function hasPlanPatchChanged(task: GanttTask, patch: PatchTask) {
+  return planPatchTime(task, {}, "planStart") !== planPatchTime(task, patch, "planStart")
+    || planPatchTime(task, {}, "planEnd") !== planPatchTime(task, patch, "planEnd")
+}
+
+function notifyPlanDependencyConstraint(task: GanttTask, requested: PatchTask, clamped: PatchTask) {
+  if (!didClampPlanPatch(task, requested, clamped)) {
+    return
+  }
+  const incoming = normalizedLinks.value.filter((link) => link.targetId === task.id)
+  const sourceId = incoming[0]?.sourceId ?? task.id
+  const lockText = incoming[0] ? linkLockLabel(incoming[0].type) : "计划时间受到依赖关系限制"
+  showDependencyNotice({
+    reason: "constraint",
+    sourceId,
+    targetId: task.id,
+    message: `${lockText}，已按依赖约束调整。`
+  })
 }
 
 function clampTaskListWidth(width: number): number {
@@ -1376,7 +1445,7 @@ function renderGanttCanvasImage(options: GanttExportImageOptions = {}): string {
   context.fillStyle = background
   context.fillRect(0, 0, width, height)
 
-  const toolbarHeight = Math.round(chart.querySelector<HTMLElement>(".gantt-toolbar")?.getBoundingClientRect().height ?? 48)
+  const toolbarHeight = Math.round(chart.querySelector<HTMLElement>(".gantt-toolbar")?.getBoundingClientRect().height ?? 0)
   const headerHeight = mergedConfig.value.headerHeight
   const rowHeight = mergedConfig.value.rowHeight
   const tableWidth = Math.min(taskListWidth.value, width)
@@ -1479,8 +1548,7 @@ function drawExportTable(
   context.stroke()
 
   let cursor = -scrollLeftValue
-  for (const column of tableColumns.value) {
-    const columnWidth = Math.max(48, column.width ?? 100)
+  for (const { column, width: columnWidth } of tableColumnWidths.value) {
     if (cursor + columnWidth >= 0 && cursor <= width) {
       context.strokeStyle = "#eef2f7"
       context.strokeRect(cursor, top, columnWidth, headerHeight)
@@ -1502,8 +1570,7 @@ function drawExportTable(
     context.stroke()
 
     let cellX = -scrollLeftValue
-    for (const column of tableColumns.value) {
-      const columnWidth = Math.max(48, column.width ?? 100)
+    for (const { column, width: columnWidth } of tableColumnWidths.value) {
       if (cellX + columnWidth >= 0 && cellX <= width) {
         context.strokeStyle = "#eef2f7"
         context.beginPath()
@@ -1673,14 +1740,22 @@ function drawExportBars(context: CanvasRenderingContext2D, x: number, top: numbe
       const plan = planPreviewLayout(displayTask)
       const planX = x + plan.left - scrollLeft.value
       const planY = rowY + planTop
-      drawRoundRect(context, planX, planY, plan.width, PLAN_BAR_HEIGHT, 999, displayTask.planColor || defaultPlanColor())
-      drawRoundRect(context, planX, planY, plan.width * Math.max(0, Math.min(100, displayTask.actual.progress)) / 100, PLAN_BAR_HEIGHT, 999, "rgba(20, 116, 112, 0.72)")
+      if (displayTask.type === "summary") {
+        drawSummaryExportBar(context, planX, planY + 2, plan.width, 8, displayTask.planColor || defaultPlanColor(), true)
+      } else {
+        drawRoundRect(context, planX, planY, plan.width, PLAN_BAR_HEIGHT, 999, displayTask.planColor || defaultPlanColor())
+        drawRoundRect(context, planX, planY, plan.width * Math.max(0, Math.min(100, displayTask.actual.progress)) / 100, PLAN_BAR_HEIGHT, 999, "rgba(20, 116, 112, 0.72)")
+      }
     }
     if (mergedConfig.value.showActualBar !== false) {
       const actualX = x + layout.left - scrollLeft.value
       const actualY = rowY + (displayTask.type === "summary" ? actualTop + 1 : actualTop)
       const actualHeight = displayTask.type === "summary" ? 8 : ACTUAL_BAR_HEIGHT
-      drawRoundRect(context, actualX, actualY, layout.width, actualHeight, 999, actualTaskColor(displayTask))
+      if (displayTask.type === "summary") {
+        drawSummaryExportBar(context, actualX, actualY - 2, layout.width, 12, actualTaskColor(displayTask), false)
+      } else {
+        drawRoundRect(context, actualX, actualY, layout.width, actualHeight, 999, actualTaskColor(displayTask))
+      }
       if (isOverdue(displayTask)) {
         const actualStart = toDate(displayTask.actual.start)
         const actualEnd = toDate(displayTask.actual.end)
@@ -1688,10 +1763,40 @@ function drawExportBars(context: CanvasRenderingContext2D, x: number, top: numbe
         const totalDays = taskDurationDays(actualStart, actualEnd)
         const offsetDays = Math.max(0, Math.round((overdueStart.getTime() - actualStart.getTime()) / 86400000))
         const overdueX = actualX + Math.min(layout.width, layout.width * offsetDays / totalDays)
-        drawRoundRect(context, overdueX, actualY, Math.max(0, actualX + layout.width - overdueX), actualHeight, 999, "#dc2626")
+        if (displayTask.type === "summary") {
+          drawSummaryExportOverdue(context, overdueX, actualY - 2, Math.max(0, actualX + layout.width - overdueX), 12)
+        } else {
+          drawRoundRect(context, overdueX, actualY, Math.max(0, actualX + layout.width - overdueX), actualHeight, 999, "#dc2626")
+        }
       }
     }
   }
+}
+
+function drawSummaryExportOverdue(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
+  if (width <= 0) return
+  drawRoundRect(context, x, y + height / 2 - 2, width, 4, 999, "#dc2626")
+  drawRoundRect(context, x + width - 8, y, 8, height, 3, "#dc2626")
+}
+
+function drawSummaryExportBar(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: string,
+  isPlan: boolean
+) {
+  if (width <= 0) return
+  if (isPlan) {
+    drawRoundRect(context, x, y, width, Math.max(4, height - 2), 999, color)
+  } else {
+    drawRoundRect(context, x, y + height / 2 - 2, width, 4, 999, color)
+  }
+  const capWidth = isPlan ? 6 : 8
+  drawRoundRect(context, x, y, capWidth, height, 3, color)
+  drawRoundRect(context, x + width - capWidth, y, capWidth, height, 3, color)
 }
 
 function clipCanvasRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
@@ -1803,9 +1908,9 @@ function downloadDataUrl(dataUrl: string, filename: string) {
 }
 
 async function enterFullscreen() {
-  const chart = chartRef.value
-  if (!chart || !chart.requestFullscreen) return
-  await chart.requestFullscreen()
+  const target = fullscreenElement()
+  if (!target || !target.requestFullscreen) return
+  await target.requestFullscreen()
 }
 
 async function exitFullscreen() {
@@ -1815,11 +1920,15 @@ async function exitFullscreen() {
 }
 
 async function toggleFullscreen() {
-  if (document.fullscreenElement === chartRef.value) {
+  if (document.fullscreenElement === fullscreenElement()) {
     await exitFullscreen()
   } else {
     await enterFullscreen()
   }
+}
+
+function fullscreenElement() {
+  return chartRef.value?.closest<HTMLElement>("[data-gantt-fullscreen-root]") ?? chartRef.value
 }
 
 function taskStyle(layout: TaskLayout, task: GanttTask) {
@@ -2237,12 +2346,14 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
       return
     }
 
-    const patch = clampPlanPatchByDependencies(
-      task,
-      buildPlanDragPatch(task, mode, originalStart, originalEnd, deltaDays),
-      mode
-    )
+    const requestedPatch = buildPlanDragPatch(task, mode, originalStart, originalEnd, deltaDays)
+    const patch = clampPlanPatchByDependencies(task, requestedPatch, mode)
     const affected = computePlanDependencyPatches(task.id, patch)
+    notifyPlanDependencyConstraint(task, requestedPatch, patch)
+    if (!hasPlanPatchChanged(task, patch) && !Object.keys(affected).length) {
+      dragPreview.value = null
+      return
+    }
     emit("taskChange", task.id, patch)
     for (const [taskId, affectedPatch] of Object.entries(affected)) {
       emit("taskChange", taskId, affectedPatch)
@@ -2273,7 +2384,13 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
 }
 
 function beginLink(event: PointerEvent, task: GanttTask, sourceAnchor: LinkAnchor) {
-  if (mergedConfig.value.editable === false || mergedConfig.value.enableLinkCreation === false || task.type === "milestone" || task.type === "summary") {
+  if (
+    mergedConfig.value.editable === false
+    || mergedConfig.value.enableLinkCreation === false
+    || mergedConfig.value.showPlanBar === false
+    || task.type === "milestone"
+    || task.type === "summary"
+  ) {
     return
   }
   const timeline = timelineRef.value?.getBoundingClientRect()
@@ -2305,6 +2422,10 @@ function beginLink(event: PointerEvent, task: GanttTask, sourceAnchor: LinkAncho
 function finishLink(task: GanttTask, targetAnchor: LinkAnchor = "start") {
   const draft = linkDraft.value
   if (!draft) {
+    return
+  }
+  if (mergedConfig.value.showPlanBar === false) {
+    clearLinkDraft()
     return
   }
   if (draft.sourceId === task.id) {
@@ -2580,39 +2701,9 @@ defineExpose({
       <span>!</span>
       {{ linkNotice.message }}
     </div>
-    <div class="gantt-toolbar">
-      <div class="gantt-title">
-        <strong>项目甘特图</strong>
-        <span>{{ flatTasks.length }} 个任务</span>
-      </div>
-      <div class="gantt-legend" aria-label="时间条图例">
-        <span><i class="plan"></i>计划</span>
-        <span><i class="actual"></i>实际</span>
-      </div>
-      <div class="gantt-actions">
-        <button class="quiet" type="button" :disabled="!selectedTask" @click="selectedTask && openEditor(selectedTask)">编辑</button>
-        <button class="quiet" type="button" :disabled="exportingImage" @click="handleExportImage">{{ exportingImage ? "导出中..." : "导出图片" }}</button>
-        <button class="quiet" type="button" @click="toggleFullscreen">{{ isFullscreen ? "退出全屏" : "全屏" }}</button>
-        <button class="primary" type="button" @click="openCreateEditor('task')">新建任务</button>
-        <button class="secondary" type="button" @click="openCreateMarker">新建里程碑</button>
-      </div>
-      <fieldset class="gantt-scale-options" aria-label="时间刻度">
-        <label v-for="option in viewOptions" :key="option.mode">
-          <input
-            type="radio"
-            name="gantt-view-mode"
-            :value="option.mode"
-            :checked="mergedConfig.viewMode === option.mode"
-            @change="setViewMode(option.mode)"
-          >
-          <span>{{ option.label }}</span>
-        </label>
-      </fieldset>
-    </div>
-
-    <div v-if="!tasks.length" class="gantt-empty">暂无任务</div>
-    <div v-else class="gantt-main">
-      <div class="gantt-table" :style="{ width: `${taskListWidth}px` }">
+    <div v-if="!tasks.length && !shouldShowEmptyTimeline" class="gantt-empty">暂无任务</div>
+    <div v-else class="gantt-main" :class="{ 'empty-timeline': shouldShowEmptyTimeline }">
+      <div v-if="!shouldShowEmptyTimeline" class="gantt-table" :style="{ width: `${taskListWidth}px` }">
         <div ref="tableRef" class="gantt-table-scroll" @scroll="syncTableScroll">
           <div
             class="gantt-table-head"
@@ -2739,6 +2830,7 @@ defineExpose({
       </div>
 
       <div
+        v-if="!shouldShowEmptyTimeline"
         class="gantt-splitter"
         :class="{ active: resizingTaskList }"
         role="separator"
@@ -2832,7 +2924,7 @@ defineExpose({
             </div>
           </div>
 
-          <svg class="gantt-link-layer" :style="{ top: `${mergedConfig.headerHeight}px`, width: `${totalWidth}px`, height: `${Math.max(1, totalHeight - mergedConfig.headerHeight)}px` }" aria-label="任务依赖关系">
+          <svg v-if="mergedConfig.showPlanBar !== false" class="gantt-link-layer" :style="{ top: `${mergedConfig.headerHeight}px`, width: `${totalWidth}px`, height: `${Math.max(1, totalHeight - mergedConfig.headerHeight)}px` }" aria-label="任务依赖关系">
             <defs>
               <marker id="gantt-link-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z"></path>
@@ -2896,6 +2988,8 @@ defineExpose({
               @dblclick.stop="openEditor(taskById.get(layout.taskId)!)"
             >
               <span class="gantt-plan-progress" :style="{ width: `${taskById.get(layout.taskId)?.actual.progress ?? 0}%` }"></span>
+              <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-cap start"></span>
+              <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-cap end"></span>
               <button
                 v-if="mergedConfig.enableLinkCreation !== false && taskById.get(layout.taskId)?.type === 'task'"
                 class="gantt-link-handle in"
@@ -2947,6 +3041,10 @@ defineExpose({
               </template>
               <template v-else>
                 <button v-if="taskById.get(layout.taskId)?.type !== 'summary'" class="gantt-resize start" type="button" aria-label="调整开始时间" @pointerdown.stop="beginDrag($event, taskById.get(layout.taskId)!, 'start')" />
+                <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-line"></span>
+                <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-cap start"></span>
+                <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-cap end"></span>
+                <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-overdue-line" :style="overdueSegmentStyle(previewTask(taskById.get(layout.taskId)!))"></span>
                 <span class="gantt-overdue-segment" :style="overdueSegmentStyle(previewTask(taskById.get(layout.taskId)!))"></span>
                 <button v-if="taskById.get(layout.taskId)?.type !== 'summary'" class="gantt-resize end" type="button" aria-label="调整结束时间" @pointerdown.stop="beginDrag($event, taskById.get(layout.taskId)!, 'end')" />
               </template>
