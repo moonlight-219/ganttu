@@ -1,6 +1,6 @@
 {
   "name": "@gantt/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "tsup": "^8.3.5",
@@ -24,9 +25,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "scripts": {
-    "build": "tsup",
-    "prepublishOnly": "pnpm build"
   }
 }
