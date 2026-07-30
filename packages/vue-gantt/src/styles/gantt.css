@@ -859,8 +859,7 @@ body.gantt-resizing {
   right: -7px;
 }
 
-.gantt-plan-resize::after,
-.gantt-resize::after {
+.gantt-plan-resize::after {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -945,6 +944,7 @@ body.gantt-resizing {
 .gantt-overdue-segment {
   position: absolute;
   top: 0;
+  right: 0;
   bottom: 0;
   border-radius: 0 999px 999px 0;
   background: color-mix(in srgb, var(--overdue-color), transparent 16%);

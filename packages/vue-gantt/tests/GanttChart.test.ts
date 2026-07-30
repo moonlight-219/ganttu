@@ -823,7 +823,27 @@ describe("GanttChart", () => {
     })
 
     expect(wrapper.find(".gantt-bar.task").classes()).toContain("overdue")
-    expect(wrapper.find(".gantt-bar.task .gantt-overdue-segment").exists()).toBe(true)
+    const overdueSegment = wrapper.find(".gantt-bar.task .gantt-overdue-segment")
+    expect(overdueSegment.exists()).toBe(true)
+    expect(overdueSegment.attributes("style")).toContain("left:")
+    expect(overdueSegment.attributes("style")).not.toContain("width:")
+  })
+
+  it("rounds both ends when the entire actual bar is overdue", () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{
+          id: "fully-late",
+          name: "Fully late task",
+          type: "task",
+          plan: { start: "2026-07-01", end: "2026-07-05" },
+          actual: { start: "2026-07-06", end: "2026-07-08", progress: 60 }
+        }],
+        config: { viewMode: "day" }
+      }
+    })
+
+    expect(wrapper.find(".gantt-overdue-segment").attributes("style")).toContain("border-radius: 999px")
   })
 
   it("controls plan and actual visibility and drag permissions independently", async () => {

@@ -1326,7 +1326,7 @@ function overdueSegmentStyle(task: GanttTask) {
 
   return {
     left: `${left}%`,
-    width: `${Math.max(0, 100 - left)}%`
+    borderRadius: left <= 0 ? "999px" : "0 999px 999px 0"
   }
 }
 
