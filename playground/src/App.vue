@@ -25,7 +25,7 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   ]
 })
 
-type DemoDataMode = "basic" | "medium" | "large" | "huge"
+type DemoDataMode = "basic" | "medium" | "large" | "huge" | "massive"
 
 const demoAllTasks = ref<GanttTask[]>(createLargeDataset(100))
 const demoDataMode = ref<DemoDataMode>("basic")
@@ -550,6 +550,7 @@ function closeMobileNav() {
           <button type="button" :class="{ active: demoDataMode === 'medium' }" @click="useDemoDataset('medium', 1000)">中等数据（1000条）</button>
           <button type="button" :class="{ active: demoDataMode === 'large' }" @click="useDemoDataset('large', 3200)">大量数据（3200条）</button>
           <button type="button" :class="{ active: demoDataMode === 'huge' }" @click="useDemoDataset('huge', 5200)">超多数据（5200条）</button>
+          <button type="button" :class="{ active: demoDataMode === 'massive' }" @click="useDemoDataset('massive', 10000)">万条数据（10000条）</button>
         </div>
       </div>
      <GanttChart
