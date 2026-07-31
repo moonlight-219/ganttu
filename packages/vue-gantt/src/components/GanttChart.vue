@@ -291,9 +291,8 @@ const dateRange = computed(() => {
     }
   }
 
-  const rangeTasks = dragPreview.value ? displayedTasks.value : baseDisplayedTasks.value
   const dates = [
-    ...rangeTasks.flatMap((task) => [
+    ...baseDisplayedTasks.value.flatMap((task) => [
       toDate(task.plan.start),
       toDate(task.plan.end),
       toDate(task.actual.start),
@@ -301,16 +300,45 @@ const dateRange = computed(() => {
     ]),
     ...props.markers.map((marker) => toDate(marker.date))
   ]
+  // 拖拽中范围只扩不缩：在原始范围上叠加预览日期，避免拖动途中时间轴两端被提前裁剪
+  const preview = dragPreview.value
+  if (preview) {
+    for (const id of [preview.taskId, ...Object.keys(preview.affected ?? {})]) {
+      const task = taskById.value.get(id)
+      if (task) {
+        dates.push(
+          toDate(task.plan.start),
+          toDate(task.plan.end),
+          toDate(task.actual.start),
+          toDate(task.actual.end)
+        )
+      }
+    }
+  }
   if (!dates.length) {
     const today = toDate(new Date())
-    return { start: today, end: addDays(today, 30) }
+    return padDateRangeToViewport({ start: today, end: addDays(today, 30) })
   }
 
-  return {
+  return padDateRangeToViewport({
     start: new Date(Math.min(...dates.map((date) => date.getTime()))),
     end: new Date(Math.max(...dates.map((date) => date.getTime())))
-  }
+  })
 })
+// 数据跨度不足以铺满视口宽度时，向右补足日期列，避免时间轴右侧出现无表头无网格的留白
+function padDateRangeToViewport(range: { start: Date; end: Date }): { start: Date; end: Date } {
+  const viewportWidth = viewportSize.value.width
+  const columnWidth = mergedConfig.value.columnWidth
+  if (viewportWidth <= 0 || columnWidth <= 0) {
+    return range
+  }
+  const spanDays = Math.round((range.end.getTime() - range.start.getTime()) / 86400000) + 1
+  const requiredDays = Math.ceil(viewportWidth / columnWidth)
+  if (spanDays >= requiredDays) {
+    return range
+  }
+  return { start: range.start, end: addDays(range.start, requiredDays - 1) }
+}
 const scale = computed<TimeScale[]>(() => computeTimeScale(
   dateRange.value.start,
   dateRange.value.end,
@@ -329,7 +357,7 @@ const totalHeight = computed(() => {
 })
 const viewportHeight = computed(() => {
   const fallbackHeight = Number.isFinite(Number.parseFloat(chartHeight.value)) ? Number.parseFloat(chartHeight.value) : 0
-  const measuredHeight = viewportSize.value.height
+    const measuredHeight = viewportSize.value.height
     || timelineRef.value?.clientHeight
     || tableRef.value?.clientHeight
     || fallbackHeight
@@ -607,6 +635,21 @@ function taskDurationText(task: GanttTask): string {
 watch([scale, layouts, scrollLeft, scrollTop, taskListWidth], () => {
   nextTick(drawCanvas)
 })
+
+// 拖拽预览把时间轴向左扩展时，timelineStart 前移会使所有内容坐标整体右移，
+// 需同步补偿滚动位置，避免视口内容跳动、被拖拽条钉在最左端不跟手
+watch(timelineStart, (next, prev) => {
+  if (!draggingTask.value || !timelineRef.value) {
+    return
+  }
+  const shiftPx = Math.round((prev.getTime() - next.getTime()) / 86400000) * mergedConfig.value.columnWidth
+  if (!shiftPx) {
+    return
+  }
+  const timeline = timelineRef.value
+  timeline.scrollLeft += shiftPx
+  scrollLeft.value = timeline.scrollLeft
+}, { flush: "post" })
 
 onMounted(() => {
   drawCanvas()
@@ -1261,6 +1304,25 @@ function isNearTimelineHorizontalEdge(clientX: number): boolean {
   }
   const edgeSize = 56
   return clientX < rect.left + edgeSize || clientX > rect.right - edgeSize
+}
+
+// 滚动已到头时的虚拟推进量：指针停在边缘仍能持续移动任务条，驱动时间轴继续扩展
+function horizontalEdgeNudge(clientX: number): number {
+  const rect = timelineRef.value?.getBoundingClientRect()
+  if (!rect || rect.width <= 0) {
+    return 0
+  }
+  const edgeSize = 56
+  const maxStep = Math.max(4, Math.min(18, mergedConfig.value.columnWidth / 2))
+  if (clientX < rect.left + edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - clientX) / edgeSize))
+    return -Math.ceil(maxStep * ratio)
+  }
+  if (clientX > rect.right - edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (clientX - (rect.right - edgeSize)) / edgeSize))
+    return Math.ceil(maxStep * ratio)
+  }
+  return 0
 }
 
 function updateLinkDraft(event: PointerEvent) {
@@ -2121,6 +2183,7 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
 
   const startX = event.clientX
   const originalScrollLeft = scrollLeft.value
+  const originalTimelineStart = timelineStart.value.getTime()
   const columnWidth = mergedConfig.value.columnWidth
   const originalStart = toDate(task.actual.start)
   const originalEnd = toDate(task.actual.end)
@@ -2139,9 +2202,11 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   let edgeScrollFrame = 0
   let pendingDeltaDays = 0
   let lastClientX = startX
+  let edgeNudgePx = 0
 
   const computeDeltaDays = (clientX: number) =>
-    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft) / columnWidth)
+    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft + edgeNudgePx) / columnWidth)
+      + Math.round((timelineStart.value.getTime() - originalTimelineStart) / 86400000)
 
   const queuePreview = (deltaDays: number) => {
     if (deltaDays === lastDeltaDays) {
@@ -2156,7 +2221,9 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
 
   const tickEdgeScroll = () => {
     edgeScrollFrame = 0
-    horizontalEdgeScroll(lastClientX)
+    if (!horizontalEdgeScroll(lastClientX)) {
+      edgeNudgePx += horizontalEdgeNudge(lastClientX)
+    }
     queuePreview(computeDeltaDays(lastClientX))
     if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
@@ -2256,6 +2323,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
 
   const startX = event.clientX
   const originalScrollLeft = scrollLeft.value
+  const originalTimelineStart = timelineStart.value.getTime()
   const columnWidth = mergedConfig.value.columnWidth
   const originalStart = toDate(task.plan.start)
   const originalEnd = toDate(task.plan.end)
@@ -2275,9 +2343,11 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   let edgeScrollFrame = 0
   let pendingDeltaDays = 0
   let lastClientX = startX
+  let edgeNudgePx = 0
 
   const computeDeltaDays = (clientX: number) =>
-    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft) / columnWidth)
+    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft + edgeNudgePx) / columnWidth)
+      + Math.round((timelineStart.value.getTime() - originalTimelineStart) / 86400000)
 
   const queuePreview = (deltaDays: number) => {
     if (deltaDays === lastDeltaDays) {
@@ -2292,7 +2362,9 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
 
   const tickEdgeScroll = () => {
     edgeScrollFrame = 0
-    horizontalEdgeScroll(lastClientX)
+    if (!horizontalEdgeScroll(lastClientX)) {
+      edgeNudgePx += horizontalEdgeNudge(lastClientX)
+    }
     queuePreview(computeDeltaDays(lastClientX))
     if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
