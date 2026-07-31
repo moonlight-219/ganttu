@@ -321,7 +321,7 @@ const scale = computed<TimeScale[]>(() => computeTimeScale(
 const totalWidth = computed(() => scale.value.reduce((sum, tick) => sum + tick.width, 0))
 const totalHeight = computed(() => {
   const bodyHeight = flatTasks.value.length
-    ? flatTasks.value.length * mergedConfig.value.rowHeight
+    ? Math.max(flatTasks.value.length * mergedConfig.value.rowHeight, viewportHeight.value)
     : mergedConfig.value.showTimelineWhenEmpty
       ? viewportHeight.value
       : 0
