@@ -327,6 +327,9 @@ const dateRange = computed(() => {
 })
 // 数据跨度不足以铺满视口宽度时，向右补足日期列，避免时间轴右侧出现无表头无网格的留白
 function padDateRangeToViewport(range: { start: Date; end: Date }): { start: Date; end: Date } {
+  if (mergedConfig.value.fitTimelineToViewport === false) {
+    return range
+  }
   const viewportWidth = viewportSize.value.width
   const columnWidth = mergedConfig.value.columnWidth
   if (viewportWidth <= 0 || columnWidth <= 0) {

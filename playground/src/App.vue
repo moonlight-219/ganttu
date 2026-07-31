@@ -77,6 +77,7 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   showLinkRejectionNotice: true,
   virtualScroll: true,
   autoSchedule: true,
+  fitTimelineToViewport: true,
   taskColors: {
     task: "#2563eb",
     summary: "#475467",
@@ -114,7 +115,7 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   ]
 })
 
-type DemoDataMode = "empty" | "single" | "basic" | "medium" | "large" | "huge" | "massive"
+type DemoDataMode = "empty" | "five" | "basic" | "medium" | "large" | "huge" | "massive"
 
 const demoAllTasks = ref<GanttTask[]>(createLargeDataset(100))
 const demoDataMode = ref<DemoDataMode>("basic")
@@ -198,7 +199,7 @@ const demoViewOptions: Array<{ mode: GanttConfig["viewMode"]; label: string }> =
 ]
 const demoDatasets: Array<{ mode: DemoDataMode; label: string; count: number }> = [
   { mode: "empty", label: "空数据", count: 0 },
-  { mode: "single", label: "1 条", count: 1 },
+  { mode: "five", label: "5 条", count: 5 },
   { mode: "basic", label: "100 条", count: 100 },
   { mode: "medium", label: "1,000 条", count: 1000 },
   { mode: "large", label: "3,200 条", count: 3200 },
@@ -735,6 +736,7 @@ const configRows = [
   ["builtInMarkerEditor", "boolean", "true", "是否使用内置里程碑弹窗。"],
   ["virtualScroll", "boolean", "true", "是否启用纵向虚拟滚动。"],
   ["autoSchedule", "boolean", "true", "拖动计划条时是否按依赖联动排程；实际条不受依赖自动排程影响。"],
+  ["fitTimelineToViewport", "boolean", "true", "数据跨度较小时是否自动补全日期列以铺满视口；关闭后 timeline 按真实数据跨度渲染，可能出现横向滚动条。"],
   ["taskColors", "object", "内置色值", "任务条、阶段条、里程碑、计划条默认颜色。"]
 ]
 
@@ -993,6 +995,13 @@ watch(codeLang, async () => {
                 @click="toggleActualBar"
               >
                 实际条
+              </button>
+              <button
+                type="button"
+                :class="{ active: demoConfig.fitTimelineToViewport !== false }"
+                @click="demoConfig.fitTimelineToViewport = !demoConfig.fitTimelineToViewport"
+              >
+                铺满
               </button>
               <div class="demo-column-config">
                 <button
