@@ -18,7 +18,7 @@ import {
   type TaskLayout,
   type TimeScale,
   type ViewMode
-} from "@gantt/core"
+} from "ct-gantt-core"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import GanttDatePicker from "./GanttDatePicker.vue"
 import GanttSelect from "./GanttSelect.vue"

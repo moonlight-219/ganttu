@@ -4,14 +4,14 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm --filter @gantt/playground dev",
+    "dev": "pnpm --filter ct-gantt-playground dev",
     "lint": "tsc -p tsconfig.base.json --noEmit",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "benchmark": "pnpm --filter @gantt/playground benchmark",
-    "publish": "pnpm -r --filter @gantt/core --filter @gantt/vue-gantt publish",
-    "publish:force": "pnpm -r --filter @gantt/core --filter @gantt/vue-gantt publish --no-git-checks"
+    "benchmark": "pnpm --filter ct-gantt-playground benchmark",
+    "publish": "pnpm -r --filter ct-gantt-core --filter ct-gantt-vue publish",
+    "publish:force": "pnpm -r --filter ct-gantt-core --filter ct-gantt-vue publish --no-git-checks"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",

@@ -7,7 +7,7 @@
     "emitDeclarationOnly": true,
     "noEmit": false,
     "paths": {
-      "@gantt/core": ["../core/dist/index.d.ts"]
+      "ct-gantt-core": ["../core/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],

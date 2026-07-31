@@ -14,7 +14,7 @@ export type {
   GanttTask,
   PatchTask,
   ViewMode
-} from "@gantt/core"
+} from "ct-gantt-core"
 export type {
   GanttChartExpose,
   GanttExportImageOptions,

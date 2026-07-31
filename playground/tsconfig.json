@@ -3,8 +3,8 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@gantt/core": ["../packages/core/src"],
-      "@gantt/vue-gantt": ["../packages/vue-gantt/src"]
+      "ct-gantt-core": ["../packages/core/src"],
+      "ct-gantt-vue": ["../packages/vue-gantt/src"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"]

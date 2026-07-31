@@ -6,8 +6,8 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      "@gantt/core": new URL("../packages/core/src/index.ts", import.meta.url).pathname,
-      "@gantt/vue-gantt": new URL("../packages/vue-gantt/src/index.ts", import.meta.url).pathname
+      "ct-gantt-core": new URL("../packages/core/src/index.ts", import.meta.url).pathname,
+      "ct-gantt-vue": new URL("../packages/vue-gantt/src/index.ts", import.meta.url).pathname
     }
   },
   server: {

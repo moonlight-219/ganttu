@@ -1,5 +1,5 @@
-import type { GanttTask } from "@gantt/core"
-import { addDays, formatDate } from "@gantt/core"
+import type { GanttTask } from "ct-gantt-core"
+import { addDays, formatDate } from "ct-gantt-core"
 
 export function createBasicTasks(): GanttTask[] {
   const phases = [

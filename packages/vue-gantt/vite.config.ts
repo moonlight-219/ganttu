@@ -11,7 +11,7 @@ export default defineConfig({
       fileName: "index"
     },
     rollupOptions: {
-      external: ["vue", "@gantt/core"],
+      external: ["vue", "ct-gantt-core"],
       output: {
         globals: {
           vue: "Vue"

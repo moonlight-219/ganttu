@@ -4,7 +4,7 @@
     "baseUrl": ".",
     "outDir": "dist",
     "paths": {
-      "@gantt/core": ["../core/src"]
+      "ct-gantt-core": ["../core/src"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "tests/**/*.ts"],

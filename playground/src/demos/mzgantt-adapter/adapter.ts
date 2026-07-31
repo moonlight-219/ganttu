@@ -1,4 +1,4 @@
-import type { GanttLink, GanttMarker, GanttTask } from "@gantt/core"
+import type { GanttLink, GanttMarker, GanttTask } from "ct-gantt-core"
 
 export interface MzTask {
   UID: string

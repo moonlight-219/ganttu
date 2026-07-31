@@ -1,4 +1,4 @@
-import type { TimeScale } from "@gantt/core"
+import type { TimeScale } from "ct-gantt-core"
 
 export function drawGrid(
   context: CanvasRenderingContext2D,

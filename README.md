@@ -1,20 +1,20 @@
 # Vue Gantt 甘特图
 
-一个由 `@gantt/core` 和 `@gantt/vue-gantt` 组成的 Vue 3 甘特图项目，支持计划/实际双时间条、阶段汇总、任务依赖、里程碑、虚拟滚动、自定义表格列和可替换编辑器。
+一个由 `ct-gantt-core` 和 `ct-gantt-vue` 组成的 Vue 3 甘特图项目，支持计划/实际双时间条、阶段汇总、任务依赖、里程碑、虚拟滚动、自定义表格列和可替换编辑器。
 
 ## 包说明
 
 | 包 | 用途 |
 | --- | --- |
-| `@gantt/core` | 数据类型、日期工具、依赖标准化、循环检测、排程、布局和影响计算，不包含任何界面 |
-| `@gantt/vue-gantt` | 完整 Vue 甘特图组件，包含左侧表格、右侧时间轴以及内置任务、依赖和里程碑编辑界面 |
+| `ct-gantt-core` | 数据类型、日期工具、依赖标准化、循环检测、排程、布局和影响计算，不包含任何界面 |
+| `ct-gantt-vue` | 完整 Vue 甘特图组件，包含左侧表格、右侧时间轴以及内置任务、依赖和里程碑编辑界面 |
 
-如果只想自行实现弹窗，可以继续使用 `@gantt/vue-gantt`，关闭内置编辑器并监听编辑请求；如果连甘特图界面也不需要，只使用排程算法，则单独安装 `@gantt/core`。
+如果只想自行实现弹窗，可以继续使用 `ct-gantt-vue`，关闭内置编辑器并监听编辑请求；如果连甘特图界面也不需要，只使用排程算法，则单独安装 `ct-gantt-core`。
 
 ## 安装
 
 ```bash
-pnpm add vue @gantt/core @gantt/vue-gantt
+pnpm add vue ct-gantt-core ct-gantt-vue
 ```
 
 Vue 版本要求：`^3.5.0`。
@@ -22,7 +22,7 @@ Vue 版本要求：`^3.5.0`。
 在应用入口或使用甘特图的组件中引入样式：
 
 ```ts
-import "@gantt/vue-gantt/style.css"
+import "ct-gantt-vue/style.css"
 ```
 
 ## 最小示例
@@ -37,8 +37,8 @@ import GanttChart, {
   type GanttMarker,
   type GanttTask,
   type PatchTask
-} from "@gantt/vue-gantt"
-import "@gantt/vue-gantt/style.css"
+} from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
 
 const tasks = ref<GanttTask[]>([
   {
@@ -561,7 +561,7 @@ const markers: GanttMarker[] = [
 
 ## 仅使用 Core
 
-`@gantt/core` 不包含 Vue 组件和弹窗，可以用于服务端、其他框架或自定义渲染器。
+`ct-gantt-core` 不包含 Vue 组件和弹窗，可以用于服务端、其他框架或自定义渲染器。
 
 ```ts
 import {
@@ -572,7 +572,7 @@ import {
   flattenTasks,
   normalizeLinks,
   scheduleByDependencies
-} from "@gantt/core"
+} from "ct-gantt-core"
 
 const normalized = normalizeLinks(tasks, links)
 const cycle = checkCyclicDependency(normalized)

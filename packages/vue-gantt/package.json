@@ -1,5 +1,5 @@
 {
-  "name": "@gantt/vue-gantt",
+  "name": "ct-gantt-vue",
   "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.umd.cjs",
@@ -20,7 +20,7 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@gantt/core": "workspace:*"
+    "ct-gantt-core": "workspace:*"
   },
   "peerDependencies": {
     "vue": "^3.5.0"

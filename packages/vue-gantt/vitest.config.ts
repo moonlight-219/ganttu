@@ -10,7 +10,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@gantt/core": new URL("../core/src/index.ts", import.meta.url).pathname
+      "ct-gantt-core": new URL("../core/src/index.ts", import.meta.url).pathname
     }
   }
 })

@@ -78,6 +78,33 @@ pre {
   font-size: 12px;
 }
 
+/* TS/JS 语言切换 */
+.docs-lang-toggle {
+  margin-left: 12px;
+  display: flex;
+  gap: 2px;
+  border: 1px solid #dbe3ee;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.docs-lang-toggle button {
+  padding: 3px 12px;
+  border: none;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.docs-lang-toggle button.active {
+  background: var(--doc-blue);
+  color: #fff;
+}
+.docs-lang-toggle button:not(.active):hover {
+  background: #eef2ff;
+}
+
 .menu-button {
   display: none;
 }
@@ -217,6 +244,44 @@ li code {
   color: var(--doc-blue);
 }
 
+/* 代码块右上角的 TS/JS 切换 */
+.code-block .lang-switch {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 56px;
+  display: flex;
+  gap: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.code-block .lang-switch button {
+  position: static;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 0;
+  background: #ffffff;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.code-block .lang-switch button:first-child {
+  border-right: 1px solid #e5e7eb;
+}
+.code-block .lang-switch button.active {
+  background: var(--doc-blue);
+  color: #ffffff;
+  border-color: var(--doc-blue);
+}
+.code-block .lang-switch button:not(.active):hover {
+  background: #f3f4f6;
+  color: var(--doc-blue);
+}
+
 .code-block pre {
   max-height: 430px;
   margin: 0;
@@ -231,6 +296,11 @@ li code {
 
 .code-block.tall pre {
   max-height: 560px;
+}
+
+.code-block pre code.hljs {
+  padding: 0;
+  background: transparent;
 }
 
 .doc-table {
@@ -374,6 +444,10 @@ li code {
     display: none;
   }
 
+  .lang-switch {
+    display: none;
+  }
+
   .docs-content {
     padding: 72px 16px 72px;
   }
@@ -435,19 +509,15 @@ li code {
   background: linear-gradient(135deg, #f0f4ff 0%, #f8fafc 100%);
 }
 
-.gantt-demo-hero:fullscreen .gantt-demo-header {
+.gantt-demo-hero:fullscreen .gantt-demo-toolbar {
   flex: 0 0 auto;
   margin-bottom: 12px;
+  padding: 12px 14px;
+  gap: 10px;
 }
 
-.gantt-demo-hero:fullscreen .gantt-demo-header h1,
-.gantt-demo-hero:fullscreen .gantt-demo-header p {
-  display: none;
-}
-
-.gantt-demo-hero:fullscreen .gantt-demo-tools {
-  margin-top: 0;
-  grid-template-columns: 1fr;
+.gantt-demo-hero:fullscreen .toolbar-row-primary {
+  padding-bottom: 10px;
 }
 
 .gantt-demo-hero:fullscreen .gantt-chart {
@@ -456,167 +526,297 @@ li code {
   min-height: 0;
 }
 
-.gantt-demo-header {
-  margin-bottom: 28px;
-}
-
-.gantt-demo-header h1 {
-  margin: 0 0 8px;
-  font-size: 28px;
-  font-weight: 760;
-  color: #111827;
-}
-
-.gantt-demo-header p {
-  margin: 0;
-  font-size: 15px;
-  color: #6b7280;
-  line-height: 1.6;
-}
-
-.gantt-demo-tools {
-  display: grid;
-  grid-template-columns: 1fr;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  padding: 10px;
+/* ── 工具栏：两行布局 ── */
+.gantt-demo-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px 16px;
   border: 1px solid #dbe3ef;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
 }
 
-.demo-tool-group {
-  position: relative;
+.toolbar-row {
   display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.toolbar-row-primary {
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #e3e9f3;
+}
+
+.toolbar-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
   min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 4px;
-  border-radius: 8px;
 }
 
-.demo-tool-main {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
-
-.demo-tool-datasets {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  border-top: 1px solid #eef2f7;
-  padding-top: 8px;
-}
-
-.demo-tool-label {
-  display: inline-flex;
-  height: 24px;
-  align-items: center;
-  margin-right: 2px;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 760;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.demo-chart-title {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-right: 4px;
-}
-
-.demo-chart-title strong {
+.toolbar-title {
   color: #111827;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 760;
+  letter-spacing: 0.01em;
 }
 
-.demo-chart-title span {
+.toolbar-meta {
   color: #64748b;
-  font-size: 12px;
-}
-
-.demo-chart-legend,
-.demo-view-options {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.demo-chart-legend span,
-.demo-view-options label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #344054;
   font-size: 13px;
-  white-space: nowrap;
 }
 
-.demo-chart-legend i {
+.toolbar-divider {
+  width: 1px;
+  height: 14px;
+  background: #e2e8f0;
+}
+
+.toolbar-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.toolbar-legend .dot {
   display: inline-block;
   width: 18px;
   height: 5px;
+  margin-right: 5px;
   border-radius: 999px;
+  vertical-align: middle;
 }
 
-.demo-chart-legend i.plan {
+.toolbar-legend .dot.plan {
   background: #10b981;
 }
 
-.demo-chart-legend i.actual {
+.toolbar-legend .dot.actual {
   background: #2563eb;
 }
 
-.demo-view-options {
-  margin: 0 6px 0 0;
-  padding: 0;
-  border: 0;
+.toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.gantt-demo-tools button {
+.toolbar-actions .quiet {
   height: 32px;
   padding: 0 12px;
-  border: 1px solid #d1d5db;
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: #ffffff;
-  color: #374151;
+  background: transparent;
+  color: #475467;
   cursor: pointer;
   font-size: 13px;
   font-weight: 650;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-.gantt-demo-tools button.active {
-  border-color: #2563eb;
+.toolbar-actions .quiet:not(:disabled):hover {
+  background: #f1f5f9;
+  color: #1d4ed8;
+}
+
+.toolbar-actions .quiet:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.toolbar-actions .primary {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.18);
+  transition: background 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+
+.toolbar-actions .primary:hover {
+  background: #1d4ed8;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.28);
+}
+
+.toolbar-actions .primary:active {
+  transform: translateY(1px);
+}
+
+.toolbar-actions .secondary {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344054;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.toolbar-actions .secondary:hover {
+  border-color: #93c5fd;
   background: #eff6ff;
   color: #1d4ed8;
 }
 
-.demo-chart-actions {
+.toolbar-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 18px 24px;
+  flex-wrap: wrap;
+}
+
+.toolbar-group {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  border-top: 1px solid #eef2f7;
-  padding-top: 8px;
-  gap: 6px;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* 视图切换组：空间够时贴到最右边 */
+.toolbar-group-view {
   margin-left: auto;
+}
+
+.group-label {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   white-space: nowrap;
+}
+
+/* ── Segmented control：数据规模 / 显示 / 视图 ── */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 3px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+
+.segmented > label,
+.segmented > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.06s ease;
+}
+
+.segmented > label:hover,
+.segmented > button:hover {
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.segmented > label:active,
+.segmented > button:active {
+  transform: scale(0.97);
+}
+
+.segmented > label.active,
+.segmented > button.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3);
+}
+
+.segmented > label.active:hover,
+.segmented > button.active:hover {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.segmented input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.segmented > label:has(input:focus-visible) {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
 }
 
 .demo-column-config {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.demo-column-config > button {
+  /* 让 segmented 内部的自定义列按钮继承 segmented 样式 */
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.06s ease;
+}
+
+.demo-column-config > button:hover {
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.demo-column-config > button:active {
+  transform: scale(0.97);
+}
+
+.demo-column-config > button.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3);
 }
 
 .demo-column-panel {
   position: absolute;
   z-index: 80;
-  top: calc(100% + 8px);
-  left: 0;
+  top: calc(100% + 10px);
+  right: 0;
   width: 312px;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid #dbe3ef;
   border-radius: 12px;
   background: #ffffff;
@@ -644,6 +844,12 @@ li code {
 .demo-column-panel-head button {
   height: 26px;
   padding: 0 9px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #374151;
+  cursor: pointer;
+  font-size: 12px;
 }
 
 .demo-column-row {
@@ -678,33 +884,18 @@ li code {
 .demo-column-panel-footer button {
   height: 30px;
   padding: 0 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #374151;
+  cursor: pointer;
+  font-size: 12px;
 }
 
 .demo-column-panel-footer button.primary {
   border-color: #2563eb;
   background: #2563eb;
   color: #ffffff;
-}
-
-.demo-chart-actions button.quiet {
-  border-color: transparent;
-  color: #475467;
-}
-
-.demo-chart-actions button.primary {
-  border-color: #2563eb;
-  background: #2563eb;
-  color: #ffffff;
-}
-
-.demo-chart-actions button.secondary {
-  border-color: #cbd5e1;
-  color: #344054;
-}
-
-.demo-chart-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .demo-priority,
@@ -737,22 +928,36 @@ li code {
   color: #15803d;
 }
 
+@media (max-width: 1180px) {
+  .toolbar-row-controls {
+    gap: 14px 20px;
+  }
+
+  .toolbar-group-datasets .segmented {
+    flex-wrap: wrap;
+    height: auto;
+  }
+}
+
 @media (max-width: 980px) {
   .gantt-demo-hero {
     margin-left: 0;
     padding: 72px 22px 0;
   }
 
-  .gantt-demo-tools {
-    grid-template-columns: 1fr;
+  .toolbar-row-primary {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
   }
 
-  .demo-tool-datasets {
+  .toolbar-info {
     justify-content: flex-start;
   }
 
-  .demo-chart-actions {
-    margin-left: 0;
+  .toolbar-actions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
   }
 }
 
@@ -761,11 +966,33 @@ li code {
     padding: 64px 16px 0;
   }
 
-  .gantt-demo-header h1 {
-    font-size: 22px;
+  .gantt-demo-toolbar {
+    padding: 12px 12px;
+    border-radius: 10px;
   }
 
-  .gantt-demo-header p {
-    font-size: 14px;
+  .toolbar-title {
+    font-size: 15px;
+  }
+
+  .toolbar-row-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .toolbar-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .toolbar-group-view {
+    margin-left: 0;
+  }
+
+  .toolbar-group .segmented {
+    flex-wrap: wrap;
+    height: auto;
   }
 }

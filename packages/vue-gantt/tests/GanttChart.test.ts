@@ -1,7 +1,7 @@
 import { mount } from "@vue/test-utils"
 import { h, nextTick } from "vue"
 import { describe, expect, it, vi } from "vitest"
-import type { GanttLink, GanttMarker, GanttTask, PatchTask } from "@gantt/core"
+import type { GanttLink, GanttMarker, GanttTask, PatchTask } from "ct-gantt-core"
 import GanttChart from "../src/components/GanttChart.vue"
 import { buildOrthogonalLinkPath, drawLinks } from "../src/rendering/canvas/links"
 

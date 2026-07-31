@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { ref, reactive } from "vue"
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue"
 import GanttChart, {
   type GanttChartExpose,
   type GanttLinkRejection,
   type GanttMarkerEditRequest,
   type GanttTaskEditRequest
-} from "@gantt/vue-gantt"
+} from "ct-gantt-vue"
 import "../../packages/vue-gantt/src/styles/gantt.css"
-import type { CustomColumn, GanttConfig, GanttLink, GanttMarker, GanttTask, PatchTask } from "@gantt/core"
+import type { CustomColumn, GanttConfig, GanttLink, GanttMarker, GanttTask, PatchTask } from "ct-gantt-core"
 import { createLargeDataset } from "./demos/basic/data"
 
 const defaultDemoColumns: CustomColumn[] = [
@@ -34,22 +34,39 @@ const defaultDemoColumns: CustomColumn[] = [
   { key: "risk", label: "风险", width: 70, align: "center", editable: true }
 ]
 
+// Gantt 组件的 columnWidth 语义是"每天像素"（computeTimeScale 内部 width = diffDays × columnWidth）。
+// 这里先按"目标每列宽度"声明，再统一换算成每天像素，避免 quarter/year 视图下列宽被放大几十倍导致日期标签跑出视野。
+const DEMO_TARGET_COLUMN_WIDTHS: Record<NonNullable<GanttConfig["viewMode"]>, number> = {
+  day: 30,
+  week: 72,
+  month: 34,
+  quarter: 82,
+  year: 120
+}
+const DEMO_DAYS_PER_UNIT: Record<NonNullable<GanttConfig["viewMode"]>, number> = {
+  day: 1,
+  week: 7,
+  month: 30.4,   // 365 / 12
+  quarter: 91.3, // 365 / 4
+  year: 365
+}
+const demoColumnWidths = Object.fromEntries(
+  (Object.keys(DEMO_TARGET_COLUMN_WIDTHS) as Array<NonNullable<GanttConfig["viewMode"]>>).map((mode) => [
+    mode,
+    DEMO_TARGET_COLUMN_WIDTHS[mode] / DEMO_DAYS_PER_UNIT[mode]
+  ])
+) as Record<NonNullable<GanttConfig["viewMode"]>, number>
+
 const demoConfig = reactive<Partial<GanttConfig>>({
   viewMode: "month",
   rowHeight: 44,
-  columnWidth: 34,
+  columnWidth: demoColumnWidths.month,
   headerHeight: 52,
   taskListWidth: 320,
   locale: "zh-CN",
   firstDayOfWeek: 1,
   dateFormat: "YYYY-MM-DD",
-  columnWidths: {
-    day: 30,
-    week: 72,
-    month: 34,
-    quarter: 82,
-    year: 120
-  },
+  columnWidths: demoColumnWidths,
   showPlanBar: true,
   showActualBar: true,
   editable: true,
@@ -110,11 +127,80 @@ const demoMarkers = ref<GanttMarker[]>([
   { id: "review", name: "方案评审", date: "2026-07-10", color: "#d97706" },
   { id: "launch", name: "一期上线", date: "2026-09-01", color: "#dc2626" }
 ])
+
+// ── 列宽自适应：根据数据时间跨度 + 视口宽度，自动调整"每天像素" ──
+// 每个 viewMode 下每天像素的合理范围（推导自每列像素上下限 ÷ 该单位天数）
+const DEMO_COLUMN_WIDTH_RANGE: Record<NonNullable<GanttConfig["viewMode"]>, { min: number; max: number }> = {
+  day: { min: 22, max: 60 },        // 每列 22-60px
+  week: { min: 4, max: 20 },         // 每列 28-140px
+  month: { min: 0.6, max: 30 },      // 每列 18-912px
+  quarter: { min: 0.2, max: 10 },    // 每列 18-913px
+  year: { min: 0.05, max: 2.5 }      // 每列 18-912px
+}
+
+function measureTimelineViewportWidth(): number {
+  const timeline = document.querySelector<HTMLElement>(".gantt-demo-hero .gantt-timeline")
+  if (timeline?.clientWidth) {
+    return timeline.clientWidth
+  }
+  // 估算：window - sidebar - 页面 padding - taskList - splitter
+  const sidebar = window.innerWidth > 980 ? 238 : 0
+  const padding = window.innerWidth > 980 ? 68 : 32
+  return Math.max(600, window.innerWidth - sidebar - padding - (demoConfig.taskListWidth ?? 320) - 5)
+}
+
+function computeAdaptiveColumnWidth(viewMode: NonNullable<GanttConfig["viewMode"]>): number {
+  const range = DEMO_COLUMN_WIDTH_RANGE[viewMode]
+  let minTime = Infinity
+  let maxTime = -Infinity
+  for (const task of demoAllTasks.value) {
+    for (const dateStr of [task.plan?.start, task.plan?.end, task.actual?.start, task.actual?.end]) {
+      if (!dateStr) continue
+      const t = new Date(dateStr).getTime()
+      if (t < minTime) minTime = t
+      if (t > maxTime) maxTime = t
+    }
+  }
+  if (!isFinite(minTime) || !isFinite(maxTime)) {
+    return (range.min + range.max) / 2
+  }
+  // 数据跨度（天数），至少 7 天避免除零/过小
+  const spanDays = Math.max(7, Math.round((maxTime - minTime) / 86400000) + 1)
+  const viewportWidth = measureTimelineViewportWidth()
+  // 目标：timeline 总宽度 ≈ 视口的 1.2 倍（填满 + 一点滚动余地）
+  const targetTotalWidth = viewportWidth * 1.2
+  const ideal = targetTotalWidth / spanDays
+  // 下限：至少填满视口（即使超过 range.max 也接受，避免小数据量时挤在左侧）
+  const lowerBound = Math.max(range.min, viewportWidth / spanDays)
+  return Math.max(lowerBound, Math.min(ideal, range.max))
+}
+
+function applyAdaptiveColumnWidth() {
+  const viewMode = (demoConfig.viewMode ?? "month") as NonNullable<GanttConfig["viewMode"]>
+  const width = computeAdaptiveColumnWidth(viewMode)
+  demoColumnWidths[viewMode] = width
+  // 触发响应式：替换整个 columnWidths 对象
+  demoConfig.columnWidths = { ...demoColumnWidths }
+  demoConfig.columnWidth = width
+}
+
+let adaptiveResizeTimer = 0
+function onWindowResize() {
+  window.clearTimeout(adaptiveResizeTimer)
+  adaptiveResizeTimer = window.setTimeout(applyAdaptiveColumnWidth, 150)
+}
 const demoViewOptions: Array<{ mode: GanttConfig["viewMode"]; label: string }> = [
   { mode: "day", label: "周/日" },
   { mode: "week", label: "年/周" },
   { mode: "month", label: "年/月" },
   { mode: "quarter", label: "年/季度" }
+]
+const demoDatasets: Array<{ mode: DemoDataMode; label: string; count: number }> = [
+  { mode: "basic", label: "100 条", count: 100 },
+  { mode: "medium", label: "1,000 条", count: 1000 },
+  { mode: "large", label: "3,200 条", count: 3200 },
+  { mode: "huge", label: "5,200 条", count: 5200 },
+  { mode: "massive", label: "10,000 条", count: 10000 }
 ]
 const demoColumnSettings = reactive(defaultDemoColumns.map((column) => ({
   key: column.key,
@@ -191,6 +277,7 @@ async function handleMarkerDelete(id: string) {
 function useDemoDataset(mode: DemoDataMode, count: number) {
   demoDataMode.value = mode
   demoAllTasks.value = createLargeDataset(count)
+  void nextTick(applyAdaptiveColumnWidth)
 }
 
 function togglePlanBar() {
@@ -265,6 +352,7 @@ function resetDemoColumns() {
 
 function setDemoViewMode(mode: GanttConfig["viewMode"]) {
   demoConfig.viewMode = mode
+  void nextTick(applyAdaptiveColumnWidth)
   void saveDemoApi("view", "changeMode", { mode })
 }
 
@@ -335,43 +423,65 @@ const navigation = [
   { id: "notes", label: "1.12 使用注意" }
 ]
 
-const cdnCode = `<!-- 引入 Vue Gantt 样式和脚本 -->
+// ---------- 代码示例语言切换 ----------
+const codeLang = ref<"ts" | "js">("ts")
+// 代码块高亮语言类名，随 codeLang 切换
+const codeClass = computed(() => codeLang.value === "ts" ? "language-typescript" : "language-javascript")
+
+const cdnCode = `<!-- 1. 引入甘特图样式 -->
 <link rel="stylesheet" href="./gantt/style.css" />
+
+<!-- 2. 引入 Vue 3 运行环境（CDN 版本） -->
 <script src="./vue.global.prod.js"><\\/script>
+
+<!-- 3. 引入 Vue Gantt UMD 包，依赖 Vue 全局变量 -->
 <script src="./gantt/vue-gantt.umd.cjs"><\\/script>`.replace("<\\/script>", "</" + "script>")
 
-const npmCode = `// 安装
-pnpm add vue @gantt/core @gantt/vue-gantt
+const npmCodeTS = `// 1. 安装依赖（vue 和 ct-gantt-vue 是两个独立包）
+pnpm add vue ct-gantt-core ct-gantt-vue
 
-// 在入口文件或业务组件中引入样式
-import "@gantt/vue-gantt/style.css"
+// 2. 在入口文件（main.ts）或业务组件中引入样式
+import "ct-gantt-vue/style.css"
 
-// 引入组件和类型
+// 3. 按需引入组件和所需类型
 import GanttChart, {
-  type GanttTask,
-  type GanttLink,
-  type GanttMarker,
-  type GanttConfig,
-  type PatchTask,
-  type GanttChartExpose
-} from "@gantt/vue-gantt"`
+  type GanttTask,          // 任务 / 阶段 / 里程碑数据结构
+  type GanttLink,          // 任务依赖关系
+  type GanttMarker,        // 时间轴里程碑
+  type GanttConfig,        // 甘特图配置项
+  type PatchTask,          // 变更事件回传的扁平更新对象
+  type GanttChartExpose    // 组件 ref 暴露的方法类型
+} from "ct-gantt-vue"`
+
+const npmCodeJS = `// 1. 安装依赖（vue 和 ct-gantt-vue 是两个独立包）
+pnpm add vue ct-gantt-core ct-gantt-vue
+
+// 2. 在入口文件（main.js）或业务组件中引入样式
+import "ct-gantt-vue/style.css"
+
+// 3. 引入组件（JS 中类型仅为 JSDoc 注释，不影响运行）
+import GanttChart from "ct-gantt-vue"
+// 如需类型提示，可使用 JSDoc：
+// /** @type {import("ct-gantt-vue").GanttTask[]} */`
+
+const npmCode = computed(() => codeLang.value === "ts" ? npmCodeTS : npmCodeJS)
 
 const containerCode = `<template>
+  <!-- 甘特图容器：必须指定宽高，否则画布渲染异常 -->
   <div id="GanttChartDIV" class="gantt-doc-demo">
-    <!-- tasks 必填；links、markers、config、height 均为可选 -->
     <GanttChart
-      :tasks="tasks"
-      :links="links"
-      :markers="markers"
-      :config="ganttConfig"
-      height="620px"
-      @task-change="handleTaskChange"
-      @link-change="handleLinkChange"
+      :tasks="tasks"          <!-- 必填：任务数据 -->
+      :links="links"          <!-- 可选：任务依赖关系 -->
+      :markers="markers"      <!-- 可选：时间轴里程碑 -->
+      :config="ganttConfig"   <!-- 可选：甘特图配置项 -->
+      height="620px"          <!-- 组件高度，优先级高于 config.height -->
+      @task-change="handleTaskChange"   <!-- 任务变更事件 -->
+      @link-change="handleLinkChange"   <!-- 依赖变更事件 -->
     />
   </div>
 </template>`
 
-const configCode = `const ganttConfig: Partial<GanttConfig> = {
+const configCodeTS = `const ganttConfig: Partial<GanttConfig> = {
   // 以下配置均为可选；不传时会使用组件默认值
   // 甘特图基础设置
   viewMode: "day",                 // 时间刻度: day / week / month / quarter / year
@@ -425,8 +535,11 @@ const configCode = `const ganttConfig: Partial<GanttConfig> = {
     { key: "planColor", label: "计划条颜色", editable: true }
   ]
 }`
+// JS 版本仅去掉类型标注
+const configCodeJS = configCodeTS.replace(": Partial<GanttConfig>", "")
+const configCode = computed(() => codeLang.value === "ts" ? configCodeTS : configCodeJS)
 
-const dataCode = `const tasks = ref<GanttTask[]>([
+const dataCodeTS = `const tasks = ref<GanttTask[]>([
   {
     id: "phase-1",                                      // 必填：唯一 ID
     name: "一期交付",                                   // 必填：名称
@@ -478,33 +591,39 @@ const markers = ref<GanttMarker[]>([
   { id: "review", name: "方案评审", date: "2026-07-10", color: "#d97706" }
   // id/name/date 必填，color 可选
 ])`
+// JS 版本：ref 去掉泛型
+const dataCodeJS = dataCodeTS.replaceAll("ref<GanttTask[]>", "ref").replaceAll("ref<GanttLink[]>", "ref").replaceAll("ref<GanttMarker[]>", "ref")
+const dataCode = computed(() => codeLang.value === "ts" ? dataCodeTS : dataCodeJS)
 
-const createCode = `<script setup lang="ts">
+const createCodeTS = `<script setup lang="ts">
 import { ref } from "vue"
-import GanttChart, { type GanttTask, type PatchTask } from "@gantt/vue-gantt"
-import "@gantt/vue-gantt/style.css"
+import GanttChart, { type GanttTask, type PatchTask } from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
 
+// 1. 定义响应式任务数据
 const tasks = ref<GanttTask[]>([])
 
+// 2. 将 PatchTask（组件回传的扁平变更）合并回完整的 GanttTask 结构
 function mergeTaskPatch(task: GanttTask, patch: PatchTask): GanttTask {
   return {
     ...task,
     ...patch,
     plan: {
       ...task.plan,
-      start: patch.planStart ?? task.plan.start,
-      end: patch.planEnd ?? task.plan.end
+      start: patch.planStart ?? task.plan.start,   // 计划开始
+      end: patch.planEnd ?? task.plan.end           // 计划完成
     },
     actual: {
       ...task.actual,
-      start: patch.actualStart ?? task.actual.start,
-      end: patch.actualEnd ?? task.actual.end,
-      progress: patch.progress ?? task.actual.progress
+      start: patch.actualStart ?? task.actual.start,  // 实际开始
+      end: patch.actualEnd ?? task.actual.end,         // 实际完成
+      progress: patch.progress ?? task.actual.progress // 进度
     },
-    custom: patch.custom ? { ...task.custom, ...patch.custom } : task.custom
+    custom: patch.custom ? { ...task.custom, ...patch.custom } : task.custom  // 自定义字段
   }
 }
 
+// 3. 处理任务变更事件（拖拽、拉伸、编辑保存等）
 function handleTaskChange(id: string, patch: PatchTask) {
   tasks.value = tasks.value.map((task) =>
     task.id === id ? mergeTaskPatch(task, patch) : task
@@ -512,13 +631,22 @@ function handleTaskChange(id: string, patch: PatchTask) {
 }
 <\\/script>`.replace("<\\/script>", "</" + "script>")
 
+// JS 版本：<script setup> 去掉 lang="ts" 和所有类型标注
+const createCodeJS = createCodeTS
+  .replace(` lang="ts"`, "")
+  .replace(`import GanttChart, { type GanttTask, type PatchTask } from "ct-gantt-vue"`, `import GanttChart from "ct-gantt-vue"`)
+  .replaceAll(`: GanttTask`, "")
+  .replaceAll(`: PatchTask`, "")
+  .replaceAll(`ref<GanttTask[]>`, `ref`)
+const createCode = computed(() => codeLang.value === "ts" ? createCodeTS : createCodeJS)
+
 const customSlotCode = `<GanttChart :tasks="tasks" :config="{ columns }">
-  <!-- 自定义左侧表格单元格 -->
+  <!-- 自定义左侧表格「优先级」列的展示 -->
   <template #cell-priority="{ value, task }">
     <PriorityTag :value="value" :task="task" />
   </template>
 
-  <!-- 自定义任务抽屉中某个字段的编辑控件 -->
+  <!-- 自定义任务抽屉中「优先级」字段的编辑控件 -->
   <template #editor-field-priority="{ draft, value }">
     <PrioritySelect
       :model-value="value"
@@ -529,29 +657,43 @@ const customSlotCode = `<GanttChart :tasks="tasks" :config="{ columns }">
 
 const externalEditorCode = `<GanttChart
   :tasks="tasks"
-  :config="{ builtInTaskEditor: false, builtInMarkerEditor: false }"
-  @task-edit-request="openTaskDrawer"
-  @marker-edit-request="openMarkerDialog"
+  :config="{
+    builtInTaskEditor: false,     <!-- 关闭内置任务抽屉 -->
+    builtInMarkerEditor: false    <!-- 关闭内置里程碑弹窗 -->
+  }"
+  @task-edit-request="openTaskDrawer"        <!-- 双击 / 编辑按钮 → 打开外部任务抽屉 -->
+  @marker-edit-request="openMarkerDialog"    <!-- 双击里程碑 → 打开外部里程碑弹窗 -->
 />`
 
-const exportImageCode = `<script setup lang="ts">
+const exportImageCodeTS = `<script setup lang="ts">
 import { ref } from "vue"
-import GanttChart, { type GanttChartExpose } from "@gantt/vue-gantt"
+import GanttChart, { type GanttChartExpose } from "ct-gantt-vue"
 
+// 1. 获取组件 ref，用于调用公开方法
 const ganttRef = ref<GanttChartExpose>()
 
+// 2. 导出甘特图为图片
 async function exportGanttImage() {
-  // 默认导出当前可视区域并触发下载
+  // 导出当前可视区域，默认触发浏览器下载
   const dataUrl = await ganttRef.value?.exportImage({
-    filename: "project-gantt.png",
-    pixelRatio: 2
+    filename: "project-gantt.png",  // 下载文件名
+    pixelRatio: 2                   // 高清导出（2 倍分辨率）
   })
+  // 如果不希望自动下载，可传 download: false，仅获取 data URL
 }
 <\\/script>
 
 <template>
+  <!-- 通过 ref 绑定组件实例 -->
   <GanttChart ref="ganttRef" :tasks="tasks" />
 </template>`.replace("<\\/script>", "</" + "script>")
+
+// JS 版本：去掉 lang="ts" 和 ref 泛型
+const exportImageCodeJS = exportImageCodeTS
+  .replace(` lang="ts"`, "")
+  .replace(`import GanttChart, { type GanttChartExpose } from "ct-gantt-vue"`, `import GanttChart from "ct-gantt-vue"`)
+  .replaceAll(`<GanttChartExpose>`, "")
+const exportImageCode = computed(() => codeLang.value === "ts" ? exportImageCodeTS : exportImageCodeJS)
 
 const propRows = [
   ["tasks", "GanttTask[]", "是", "任务、阶段、里程碑数据。"],
@@ -763,88 +905,154 @@ async function copyCode(key: string, value: string) {
 function closeMobileNav() {
   mobileNavOpen.value = false
 }
+
+declare global {
+  interface Window {
+    hljs?: { highlightAll(): void }
+  }
+}
+
+onMounted(async () => {
+  await nextTick()
+  window.hljs?.highlightAll()
+  // 初始化自适应列宽 + 监听窗口尺寸
+  applyAdaptiveColumnWidth()
+  window.addEventListener("resize", onWindowResize)
+})
+
+onBeforeUnmount(() => {
+  window.clearTimeout(adaptiveResizeTimer)
+  window.removeEventListener("resize", onWindowResize)
+})
+
+// 切换 TS/JS 后重新高亮
+watch(codeLang, async () => {
+  await nextTick()
+  // 清除已高亮的标记，否则 highlightAll 会跳过
+  document.querySelectorAll(".code-block code").forEach((el) => {
+    el.classList.remove("hljs")
+    el.removeAttribute("data-highlighted")
+  })
+  window.hljs?.highlightAll()
+})
 </script>
 
 <template>
   <div class="docs-page">
     <section class="gantt-demo-hero" data-gantt-fullscreen-root>
-      <div class="gantt-demo-header">
-        <div class="gantt-demo-tools" aria-label="演示控制">
-          <div class="demo-tool-group demo-tool-main">
-          <div class="demo-chart-title">
-            <strong>项目甘特图</strong>
-            <span>{{ demoAllTasks.length }} 个任务</span>
+      <div class="gantt-demo-toolbar">
+        <div class="toolbar-row toolbar-row-primary">
+          <div class="toolbar-info">
+            <strong class="toolbar-title">项目甘特图</strong>
+            <span class="toolbar-meta">{{ demoAllTasks.length }} 个任务</span>
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            <span class="toolbar-legend">
+              <i class="dot plan"></i>计划
+              <i class="dot actual"></i>实际
+            </span>
           </div>
-          <div class="demo-chart-legend" aria-label="时间条图例">
-            <span><i class="plan"></i>计划</span>
-            <span><i class="actual"></i>实际</span>
-          </div>
-          <fieldset class="demo-view-options" aria-label="时间刻度">
-            <label v-for="option in demoViewOptions" :key="option.mode">
-              <input
-                type="radio"
-                name="demo-view-mode"
-                :value="option.mode"
-                :checked="demoConfig.viewMode === option.mode"
-                @change="setDemoViewMode(option.mode)"
-              >
-              <span>{{ option.label }}</span>
-            </label>
-          </fieldset>
-          </div>
-          <div class="demo-tool-group demo-tool-datasets">
-          <span class="demo-tool-label">数据与显示</span>
-          <button type="button" :class="{ active: demoDataMode === 'basic' }" @click="useDemoDataset('basic', 100)">基础数据（100条）</button>
-          <button type="button" :class="{ active: demoDataMode === 'medium' }" @click="useDemoDataset('medium', 1000)">中等数据（1000条）</button>
-          <button type="button" :class="{ active: demoDataMode === 'large' }" @click="useDemoDataset('large', 3200)">大量数据（3200条）</button>
-          <button type="button" :class="{ active: demoDataMode === 'huge' }" @click="useDemoDataset('huge', 5200)">超多数据（5200条）</button>
-          <button type="button" :class="{ active: demoDataMode === 'massive' }" @click="useDemoDataset('massive', 10000)">方案数据（10000条）</button>
-          <button type="button" :class="{ active: demoConfig.showPlanBar !== false }" @click="togglePlanBar">计划条</button>
-          <button type="button" :class="{ active: demoConfig.showActualBar !== false }" @click="toggleActualBar">实际条</button>
-          <div class="demo-column-config">
-            <button type="button" :class="{ active: demoColumnPanelOpen }" @click="demoColumnPanelOpen ? cancelDemoColumnPanel() : openDemoColumnPanel()">自定义列</button>
-            <div v-if="demoColumnPanelOpen" class="demo-column-panel">
-              <div class="demo-column-panel-head">
-                <strong>列配置</strong>
-                <button type="button" @click="resetDemoColumns">重置</button>
-              </div>
-              <div class="demo-column-row demo-column-row-title">
-                <span>字段</span>
-                <span>展示</span>
-                <span>可编辑</span>
-              </div>
-              <div v-for="column in demoColumnDrafts" :key="column.key" class="demo-column-row">
-                <span>{{ column.label }}</span>
-                <label>
-                  <input
-                    type="checkbox"
-                    :checked="column.visible"
-                    @change="updateDemoColumnVisible(column.key, ($event.target as HTMLInputElement).checked)"
-                  >
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    :checked="column.editable"
-                    :disabled="!column.visible"
-                    @change="updateDemoColumnEditable(column.key, ($event.target as HTMLInputElement).checked)"
-                  >
-                </label>
-              </div>
-              <div class="demo-column-panel-footer">
-                <button type="button" @click="cancelDemoColumnPanel">取消</button>
-                <button type="button" class="primary" @click="applyDemoColumns">保存</button>
-              </div>
-            </div>
-          </div>
-          </div>
-          <div class="demo-chart-actions">
-            <span class="demo-tool-label">操作</span>
+          <div class="toolbar-actions">
             <button type="button" class="quiet" disabled>编辑</button>
             <button type="button" class="quiet" @click="exportDemoImage">导出图片</button>
             <button type="button" class="quiet" @click="toggleDemoFullscreen">全屏</button>
             <button type="button" class="primary" @click="createDemoTask">新建任务</button>
             <button type="button" class="secondary" @click="createDemoMarker">新建里程碑</button>
+          </div>
+        </div>
+        <div class="toolbar-row toolbar-row-controls">
+          <div class="toolbar-group toolbar-group-datasets">
+            <span class="group-label">数据规模</span>
+            <div class="segmented">
+              <button
+                v-for="dataset in demoDatasets"
+                :key="dataset.mode"
+                type="button"
+                :class="{ active: demoDataMode === dataset.mode }"
+                @click="useDemoDataset(dataset.mode, dataset.count)"
+              >
+                {{ dataset.label }}
+              </button>
+            </div>
+          </div>
+          <div class="toolbar-group">
+            <span class="group-label">显示</span>
+            <div class="segmented">
+              <button
+                type="button"
+                :class="{ active: demoConfig.showPlanBar !== false }"
+                @click="togglePlanBar"
+              >
+                计划条
+              </button>
+              <button
+                type="button"
+                :class="{ active: demoConfig.showActualBar !== false }"
+                @click="toggleActualBar"
+              >
+                实际条
+              </button>
+              <div class="demo-column-config">
+                <button
+                  type="button"
+                  :class="{ active: demoColumnPanelOpen }"
+                  @click="demoColumnPanelOpen ? cancelDemoColumnPanel() : openDemoColumnPanel()"
+                >
+                  自定义列
+                </button>
+                <div v-if="demoColumnPanelOpen" class="demo-column-panel">
+                  <div class="demo-column-panel-head">
+                    <strong>列配置</strong>
+                    <button type="button" @click="resetDemoColumns">重置</button>
+                  </div>
+                  <div class="demo-column-row demo-column-row-title">
+                    <span>字段</span>
+                    <span>展示</span>
+                    <span>可编辑</span>
+                  </div>
+                  <div v-for="column in demoColumnDrafts" :key="column.key" class="demo-column-row">
+                    <span>{{ column.label }}</span>
+                    <label>
+                      <input
+                        type="checkbox"
+                        :checked="column.visible"
+                        @change="updateDemoColumnVisible(column.key, ($event.target as HTMLInputElement).checked)"
+                      >
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        :checked="column.editable"
+                        :disabled="!column.visible"
+                        @change="updateDemoColumnEditable(column.key, ($event.target as HTMLInputElement).checked)"
+                      >
+                    </label>
+                  </div>
+                  <div class="demo-column-panel-footer">
+                    <button type="button" @click="cancelDemoColumnPanel">取消</button>
+                    <button type="button" class="primary" @click="applyDemoColumns">保存</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="toolbar-group toolbar-group-view">
+            <span class="group-label">视图</span>
+            <fieldset class="segmented" aria-label="时间刻度">
+              <label
+                v-for="option in demoViewOptions"
+                :key="option.mode"
+                :class="{ active: demoConfig.viewMode === option.mode }"
+              >
+                <input
+                  type="radio"
+                  name="demo-view-mode"
+                  :value="option.mode"
+                  :checked="demoConfig.viewMode === option.mode"
+                  @change="setDemoViewMode(option.mode)"
+                >
+                <span>{{ option.label }}</span>
+              </label>
+            </fieldset>
           </div>
         </div>
       </div>
@@ -914,7 +1122,7 @@ function closeMobileNav() {
           <li>适用于项目计划、研发排期、交付跟踪等业务场景。</li>
           <li>组件采用受控数据流，所有数据变更通过事件返回给业务侧。</li>
           <li>计划条与实际条独立控制，依赖关系只建立在计划条之间。</li>
-          <li>如果只需要排程或布局算法，可以单独使用 <code>@gantt/core</code>。</li>
+          <li>如果只需要排程或布局算法，可以单独使用 <code>ct-gantt-core</code>。</li>
         </ul>
       </section>
 
@@ -926,14 +1134,18 @@ function closeMobileNav() {
         </ul>
         <div class="code-block">
           <button type="button" @click="copyCode('cdn', cdnCode)">{{ copiedKey === "cdn" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ cdnCode }}</code></pre>
+          <pre><code class="language-xml">{{ cdnCode }}</code></pre>
         </div>
         <ul>
           <li>npm 引用</li>
         </ul>
         <div class="code-block">
           <button type="button" @click="copyCode('npm', npmCode)">{{ copiedKey === "npm" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ npmCode }}</code></pre>
+          <span class="lang-switch">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </span>
+          <pre><code :class="codeClass">{{ npmCode }}</code></pre>
         </div>
       </section>
 
@@ -942,7 +1154,7 @@ function closeMobileNav() {
         <p>在 Vue 模板中定义组件渲染位置，并传入任务、依赖、里程碑和配置对象。</p>
         <div class="code-block">
           <button type="button" @click="copyCode('container', containerCode)">{{ copiedKey === "container" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ containerCode }}</code></pre>
+          <pre><code class="language-xml">{{ containerCode }}</code></pre>
         </div>
       </section>
 
@@ -954,7 +1166,11 @@ function closeMobileNav() {
         </p>
         <div class="code-block tall">
           <button type="button" @click="copyCode('config', configCode)">{{ copiedKey === "config" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ configCode }}</code></pre>
+          <span class="lang-switch">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </span>
+          <pre><code :class="codeClass">{{ configCode }}</code></pre>
         </div>
         <h2>主要参数说明</h2>
         <div class="doc-table four-cols">
@@ -988,7 +1204,11 @@ function closeMobileNav() {
         <p>甘特图数据主要由任务、依赖和里程碑三部分组成。</p>
         <div class="code-block tall">
           <button type="button" @click="copyCode('data', dataCode)">{{ copiedKey === "data" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ dataCode }}</code></pre>
+          <span class="lang-switch">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </span>
+          <pre><code :class="codeClass">{{ dataCode }}</code></pre>
         </div>
         <h2>任务字段说明</h2>
         <div class="doc-table four-cols">
@@ -1046,7 +1266,11 @@ function closeMobileNav() {
         </p>
         <div class="code-block">
           <button type="button" @click="copyCode('create', createCode)">{{ copiedKey === "create" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ createCode }}</code></pre>
+          <span class="lang-switch">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </span>
+          <pre><code :class="codeClass">{{ createCode }}</code></pre>
         </div>
       </section>
 
@@ -1112,12 +1336,12 @@ function closeMobileNav() {
         <h2>自定义列和字段编辑示例</h2>
         <div class="code-block">
           <button type="button" @click="copyCode('slot', customSlotCode)">{{ copiedKey === "slot" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ customSlotCode }}</code></pre>
+          <pre><code class="language-xml">{{ customSlotCode }}</code></pre>
         </div>
         <h2>完全使用外部弹窗示例</h2>
         <div class="code-block">
           <button type="button" @click="copyCode('editor', externalEditorCode)">{{ copiedKey === "editor" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ externalEditorCode }}</code></pre>
+          <pre><code class="language-xml">{{ externalEditorCode }}</code></pre>
         </div>
       </section>
 
@@ -1142,13 +1366,17 @@ function closeMobileNav() {
         </div>
         <div class="code-block">
           <button type="button" @click="copyCode('export', exportImageCode)">{{ copiedKey === "export" ? "已复制" : "复制" }}</button>
-          <pre><code>{{ exportImageCode }}</code></pre>
+          <span class="lang-switch">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </span>
+          <pre><code :class="codeClass">{{ exportImageCode }}</code></pre>
         </div>
       </section>
 
       <section id="core" class="doc-section">
         <h1>1.11. Core API 方法</h1>
-        <p><code>@gantt/core</code> 不依赖 Vue，可用于服务端、其他框架或自定义渲染场景。</p>
+        <p><code>ct-gantt-core</code> 不依赖 Vue，可用于服务端、其他框架或自定义渲染场景。</p>
         <div class="doc-table two-cols">
           <div class="table-head"><span>方法</span><span>说明</span></div>
           <div v-for="row in coreRows" :key="row[0]" class="table-row">

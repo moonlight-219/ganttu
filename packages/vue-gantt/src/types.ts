@@ -2,7 +2,7 @@ import type {
   GanttEditorField,
   GanttMarker,
   GanttTask
-} from "@gantt/core"
+} from "ct-gantt-core"
 
 export interface GanttTaskEditorDraft {
   id: string

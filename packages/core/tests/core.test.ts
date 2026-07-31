@@ -47,7 +47,7 @@ const tasks: GanttTask[] = [
   }
 ]
 
-describe("@gantt/core", () => {
+describe("ct-gantt-core", () => {
   it("normalizes embedded dependencies and removes duplicates", () => {
     const links = normalizeLinks(tasks, [
       { id: "manual-duplicate", sourceId: "1", targetId: "2", type: "SS", lag: 2, lagUnit: "working" }

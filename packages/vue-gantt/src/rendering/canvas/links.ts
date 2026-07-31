@@ -1,4 +1,4 @@
-import type { GanttLink, TaskLayout } from "@gantt/core"
+import type { GanttLink, TaskLayout } from "ct-gantt-core"
 
 export type LinkAnchor = "start" | "finish"
 
