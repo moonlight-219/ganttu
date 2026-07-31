@@ -1,5 +1,6 @@
 import type {
   GanttEditorField,
+  GanttEngine,
   GanttMarker,
   GanttTask
 } from "ct-gantt-core"
@@ -64,4 +65,6 @@ export interface GanttChartExpose {
   enterFullscreen: () => Promise<void>
   exitFullscreen: () => Promise<void>
   toggleFullscreen: () => Promise<void>
+  /** 命令式引擎实例（scrollToDate / zoomToFit / setTask 等）；onMounted 后可用 */
+  getEngine: () => GanttEngine | null
 }

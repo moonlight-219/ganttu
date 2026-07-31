@@ -639,7 +639,7 @@ body.gantt-dialog-open {
 }
 
 .gantt-link-layer {
-  z-index: 2;
+  z-index: 3;
   overflow: visible;
   pointer-events: none;
 }

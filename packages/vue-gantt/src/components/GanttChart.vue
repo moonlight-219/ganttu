@@ -3,9 +3,11 @@ import {
   addDays,
   computeLayout,
   computeTimeScale,
+  createGanttEngine,
   defaultConfig,
   flattenTasks,
   formatDate,
+  GanttEngine,
   normalizeLinks,
   toDate,
   type CustomColumn,
@@ -19,7 +21,7 @@ import {
   type TimeScale,
   type ViewMode
 } from "ct-gantt-core"
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue"
 import GanttDatePicker from "./GanttDatePicker.vue"
 import GanttSelect from "./GanttSelect.vue"
 import GanttDialog from "./GanttDialog.vue"
@@ -198,11 +200,24 @@ const mergedConfig = computed<GanttConfig>(() => {
     columnWidth: configuredWidth ?? props.config?.columnWidth ?? defaultConfig.columnWidth
   }
 })
+// 命令式引擎实例（onMounted 后赋值）。阶段 2 仅作命令式入口 + 影子状态，
+// 不接管渲染链路；阶段 3 再让组件渲染读引擎，届时响应式竞态可根治。
+const engineRef = shallowRef<GanttEngine | null>(null)
 watch(mergedConfig, (config) => {
   if (!resizingTaskList.value) {
     taskListWidth.value = config.taskListWidth
   }
+  engineRef.value?.mergeConfig(config)
 }, { immediate: true })
+watch(() => props.tasks, (tasks) => {
+  engineRef.value?.setTasks(tasks)
+})
+watch(() => props.links, (links) => {
+  engineRef.value?.setLinks(links)
+})
+watch(() => props.markers, (markers) => {
+  engineRef.value?.setMarkers(markers)
+}, { deep: true })
 function cssSize(value: string | number | undefined, fallback: string): string {
   if (typeof value === "number") return `${value}px`
   return value || fallback
@@ -654,7 +669,39 @@ watch(timelineStart, (next, prev) => {
   scrollLeft.value = timeline.scrollLeft
 }, { flush: "post" })
 
+// 拖拽预览清除（松手/取消）后 timeline 收缩，scrollLeft 可能超出新的 totalWidth 边界，
+// 由引擎统一 clamp + 重绘，避免 canvas translate 超出内容区导致右侧网格未覆盖
+function finishDragRender() {
+  const timeline = timelineRef.value
+  engineRef.value?.clampScrollLeft()
+  if (timeline) {
+    scrollLeft.value = timeline.scrollLeft
+  }
+  nextTick(drawCanvas)
+}
+watch(dragPreview, (next) => {
+  if (!next) {
+    finishDragRender()
+  }
+})
+
 onMounted(() => {
+  engineRef.value = createGanttEngine({
+    tasks: props.tasks,
+    links: props.links,
+    markers: props.markers,
+    config: mergedConfig.value,
+    container: timelineRef.value ?? null
+  })
+  // engine 是 collapsedIds 的真相源；change 事件回流让组件 ref 保持镜像
+  engineRef.value.on("collapsechange", (ids) => {
+    collapsedIds.value = new Set(ids as string[])
+  })
+  // engine 是 dragPreview 的真相源；previewchange 回流让组件 ref 保持镜像，
+  // dateRange/scale computed 仍依赖该 ref，响应式链路不变
+  engineRef.value.on("previewchange", (preview) => {
+    dragPreview.value = preview as typeof dragPreview.value
+  })
   drawCanvas()
   updateViewportSize()
   if (typeof ResizeObserver !== "undefined") {
@@ -676,6 +723,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  engineRef.value?.destroy()
+  engineRef.value = null
   document.removeEventListener("fullscreenchange", syncFullscreenState)
   resizeObserver?.disconnect()
   resizeObserver = null
@@ -708,13 +757,8 @@ function updateViewportSize() {
 }
 
 function toggleCollapsed(taskId: string) {
-  const next = new Set(collapsedIds.value)
-  if (next.has(taskId)) {
-    next.delete(taskId)
-  } else {
-    next.add(taskId)
-  }
-  collapsedIds.value = next
+  // 折叠状态源在 engine；toggle 后 collapsechange 事件回流更新 collapsedIds ref
+  engineRef.value?.toggleCollapse(taskId)
 }
 
 function taskName(taskId: string): string {
@@ -2242,7 +2286,7 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   const flushPreview = () => {
     previewFrame = 0
     const patch = buildDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays)
-    dragPreview.value = { taskId: task.id, patch }
+    engineRef.value?.setPreview({ taskId: task.id, patch })
   }
 
   const onMove = (moveEvent: PointerEvent) => {
@@ -2271,13 +2315,13 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
     draggingTask.value = false
 
     if (deltaDays === 0) {
-      dragPreview.value = null
+      engineRef.value?.clearPreview()
       return
     }
 
     const patch = buildDragPatch(task, mode, originalStart, originalEnd, deltaDays)
     emit("taskChange", task.id, patch)
-    dragPreview.value = null
+    engineRef.value?.clearPreview()
   }
 
   const onCancel = () => {
@@ -2294,7 +2338,7 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
     target.removeEventListener("pointercancel", onCancel)
     previewElement.classList.remove("dragging")
     draggingTask.value = false
-    dragPreview.value = null
+    engineRef.value?.clearPreview()
   }
 
   target.addEventListener("pointermove", onMove)
@@ -2388,7 +2432,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
       mode
     )
     const affected = computePlanDependencyPatches(task.id, patch)
-    dragPreview.value = { taskId: task.id, patch, affected }
+    engineRef.value?.setPreview({ taskId: task.id, patch, affected })
   }
 
   const onMove = (moveEvent: PointerEvent) => {
@@ -2417,7 +2461,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     draggingTask.value = false
 
     if (deltaDays === 0) {
-      dragPreview.value = null
+      engineRef.value?.clearPreview()
       return
     }
 
@@ -2426,14 +2470,14 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     const affected = computePlanDependencyPatches(task.id, patch)
     notifyPlanDependencyConstraint(task, requestedPatch, patch)
     if (!hasPlanPatchChanged(task, patch) && !Object.keys(affected).length) {
-      dragPreview.value = null
+      engineRef.value?.clearPreview()
       return
     }
     emit("taskChange", task.id, patch)
     for (const [taskId, affectedPatch] of Object.entries(affected)) {
       emit("taskChange", taskId, affectedPatch)
     }
-    dragPreview.value = null
+    engineRef.value?.clearPreview()
   }
 
   const onCancel = () => {
@@ -2450,7 +2494,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     target.removeEventListener("pointercancel", onCancel)
     previewElement.classList.remove("dragging")
     draggingTask.value = false
-    dragPreview.value = null
+    engineRef.value?.clearPreview()
   }
 
   target.addEventListener("pointermove", onMove)
@@ -2762,7 +2806,8 @@ defineExpose({
   exportImage,
   enterFullscreen,
   exitFullscreen,
-  toggleFullscreen
+  toggleFullscreen,
+  getEngine: () => engineRef.value
 })
 </script>
 

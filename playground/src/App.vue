@@ -368,6 +368,31 @@ async function toggleDemoFullscreen() {
   await demoGanttRef.value?.toggleFullscreen()
 }
 
+// 命令式引擎 API 演示：直接拿引擎实例做视口操作，不经 props/emit
+function scrollDemoToToday() {
+  demoGanttRef.value?.getEngine()?.scrollToDate(new Date())
+}
+
+function scrollDemoToFirstTask() {
+  const first = demoAllTasks.value[0]
+  if (first) {
+    demoGanttRef.value?.getEngine()?.scrollToTask(first.id)
+  }
+}
+
+function collapseAllDemo() {
+  const engine = demoGanttRef.value?.getEngine()
+  if (!engine) return
+  const summaryIds = demoAllTasks.value.filter((t) => t.type === "summary").map((t) => t.id)
+  engine.setCollapsed(summaryIds, true)
+}
+
+function expandAllDemo() {
+  const engine = demoGanttRef.value?.getEngine()
+  if (!engine) return
+  engine.setCollapsed(engine.getCollapsedIds(), false)
+}
+
 function createDemoTask() {
   const id = `demo-task-${Date.now()}`
   const task: GanttTask = {
@@ -960,6 +985,10 @@ watch(codeLang, async () => {
             <button type="button" class="quiet" disabled>编辑</button>
             <button type="button" class="quiet" @click="exportDemoImage">导出图片</button>
             <button type="button" class="quiet" @click="toggleDemoFullscreen">全屏</button>
+            <button type="button" class="quiet" @click="scrollDemoToToday">跳到今天</button>
+            <button type="button" class="quiet" @click="scrollDemoToFirstTask">跳到首任务</button>
+            <button type="button" class="quiet" @click="collapseAllDemo">折叠全部</button>
+            <button type="button" class="quiet" @click="expandAllDemo">展开全部</button>
             <button type="button" class="primary" @click="createDemoTask">新建任务</button>
             <button type="button" class="secondary" @click="createDemoMarker">新建里程碑</button>
           </div>
