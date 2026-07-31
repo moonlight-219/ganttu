@@ -69,6 +69,7 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   columnWidths: demoColumnWidths,
   showPlanBar: true,
   showActualBar: true,
+  showTimelineWhenEmpty: true,
   editable: true,
   editablePlan: true,
   editableActual: true,
@@ -113,7 +114,7 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   ]
 })
 
-type DemoDataMode = "basic" | "medium" | "large" | "huge" | "massive"
+type DemoDataMode = "empty" | "single" | "basic" | "medium" | "large" | "huge" | "massive"
 
 const demoAllTasks = ref<GanttTask[]>(createLargeDataset(100))
 const demoDataMode = ref<DemoDataMode>("basic")
@@ -196,6 +197,8 @@ const demoViewOptions: Array<{ mode: GanttConfig["viewMode"]; label: string }> =
   { mode: "quarter", label: "年/季度" }
 ]
 const demoDatasets: Array<{ mode: DemoDataMode; label: string; count: number }> = [
+  { mode: "empty", label: "空数据", count: 0 },
+  { mode: "single", label: "1 条", count: 1 },
   { mode: "basic", label: "100 条", count: 100 },
   { mode: "medium", label: "1,000 条", count: 1000 },
   { mode: "large", label: "3,200 条", count: 3200 },
