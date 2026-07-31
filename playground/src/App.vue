@@ -394,32 +394,11 @@ function expandAllDemo() {
 }
 
 function createDemoTask() {
-  const id = `demo-task-${Date.now()}`
-  const task: GanttTask = {
-    id,
-    name: "新建任务",
-    type: "task",
-    parentId: "group-1-module-1",
-    plan: { start: "2026-07-16", end: "2026-07-20" },
-    actual: { start: "2026-07-16", end: "2026-07-20", progress: 0 },
-    resources: ["演示成员"],
-    color: "#2563eb",
-    planColor: "#bfdbfe",
-    custom: { priority: "medium", risk: "低" }
-  }
-  demoAllTasks.value = [...demoAllTasks.value, task]
-  void saveDemoApi("task", "create", task)
+  demoGanttRef.value?.openCreateTask("task")
 }
 
 function createDemoMarker() {
-  const marker: GanttMarker = {
-    id: `demo-marker-${Date.now()}`,
-    name: "新建里程碑",
-    date: "2026-07-22",
-    color: "#d97706"
-  }
-  demoMarkers.value = [...demoMarkers.value, marker]
-  void saveDemoApi("marker", "create", marker)
+  demoGanttRef.value?.openCreateMarker()
 }
 
 function handleTaskEditRequest(request: GanttTaskEditRequest) {

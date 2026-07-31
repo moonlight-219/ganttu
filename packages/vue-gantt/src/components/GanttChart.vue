@@ -671,9 +671,27 @@ watch(timelineStart, (next, prev) => {
 
 // 拖拽预览清除（松手/取消）后 timeline 收缩，scrollLeft 可能超出新的 totalWidth 边界，
 // 由引擎统一 clamp + 重绘，避免 canvas translate 超出内容区导致右侧网格未覆盖
+function clampTimelineScrollLeft() {
+  const timeline = timelineRef.value
+  if (!timeline) {
+    return
+  }
+  const maxScrollLeft = Math.max(0, totalWidth.value - timeline.clientWidth)
+  if (timeline.scrollLeft > maxScrollLeft) {
+    timeline.scrollLeft = maxScrollLeft
+    scrollLeft.value = maxScrollLeft
+  }
+}
+
+watch([totalWidth, () => viewportSize.value.width], () => {
+  clampTimelineScrollLeft()
+  nextTick(drawCanvas)
+}, { flush: "post" })
+
 function finishDragRender() {
   const timeline = timelineRef.value
   engineRef.value?.clampScrollLeft()
+  clampTimelineScrollLeft()
   if (timeline) {
     scrollLeft.value = timeline.scrollLeft
   }
@@ -1305,43 +1323,69 @@ function syncScroll(event: Event) {
 
 function syncTableScroll(event: Event) {
   const target = event.target as HTMLDivElement
+  if (target.scrollLeft !== 0) {
+    target.scrollLeft = 0
+  }
   scrollTop.value = target.scrollTop
   if (timelineRef.value && timelineRef.value.scrollTop !== target.scrollTop) {
     timelineRef.value.scrollTop = target.scrollTop
   }
 }
 
-function horizontalEdgeScroll(clientX: number): boolean {
+function timelineDragRect(): DOMRect | null {
+  const rect = timelineRef.value?.getBoundingClientRect()
+  return rect && rect.width > 0 && rect.height > 0 ? rect : null
+}
+
+function isInsideTimelineDragArea(clientY: number): boolean {
+  const rect = timelineDragRect()
+  return !rect || (clientY >= rect.top && clientY <= rect.bottom)
+}
+
+function clampTimelineClientX(clientX: number): number {
+  const rect = timelineDragRect()
+  if (!rect) {
+    return clientX
+  }
+  return Math.min(rect.right, Math.max(rect.left, clientX))
+}
+
+function horizontalEdgeScroll(clientX: number, clientY: number): number {
   const timeline = timelineRef.value
-  if (!timeline) {
-    return false
+  if (!timeline || !isInsideTimelineDragArea(clientY)) {
+    return 0
   }
   const rect = timeline.getBoundingClientRect()
   if (rect.width <= 0) {
-    return false
+    return 0
   }
+  const edgeClientX = clampTimelineClientX(clientX)
   const edgeSize = 56
   const maxStep = Math.max(4, Math.min(18, mergedConfig.value.columnWidth / 2))
-  let nextScrollLeft = timeline.scrollLeft
+  const previousScrollLeft = timeline.scrollLeft
+  let nextScrollLeft = previousScrollLeft
 
-  if (clientX < rect.left + edgeSize) {
-    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - clientX) / edgeSize))
-    nextScrollLeft = Math.max(0, timeline.scrollLeft - Math.ceil(maxStep * ratio))
-  } else if (clientX > rect.right - edgeSize) {
-    const ratio = Math.min(1, Math.max(0, (clientX - (rect.right - edgeSize)) / edgeSize))
+  if (edgeClientX < rect.left + edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - edgeClientX) / edgeSize))
+    nextScrollLeft = Math.max(0, previousScrollLeft - Math.ceil(maxStep * ratio))
+  } else if (edgeClientX > rect.right - edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (edgeClientX - (rect.right - edgeSize)) / edgeSize))
     const maxScrollLeft = Math.max(0, timeline.scrollWidth - timeline.clientWidth)
-    nextScrollLeft = Math.min(maxScrollLeft, timeline.scrollLeft + Math.ceil(maxStep * ratio))
+    nextScrollLeft = Math.min(maxScrollLeft, previousScrollLeft + Math.ceil(maxStep * ratio))
   }
 
-  if (nextScrollLeft === timeline.scrollLeft) {
-    return false
+  if (nextScrollLeft === previousScrollLeft) {
+    return 0
   }
   timeline.scrollLeft = nextScrollLeft
   scrollLeft.value = nextScrollLeft
-  return true
+  return nextScrollLeft - previousScrollLeft
 }
 
-function isNearTimelineHorizontalEdge(clientX: number): boolean {
+function isNearTimelineHorizontalEdge(clientX: number, clientY: number): boolean {
+  if (!isInsideTimelineDragArea(clientY)) {
+    return false
+  }
   const rect = timelineRef.value?.getBoundingClientRect()
   if (!rect) {
     return false
@@ -1349,24 +1393,29 @@ function isNearTimelineHorizontalEdge(clientX: number): boolean {
   if (rect.width <= 0) {
     return false
   }
+  const edgeClientX = clampTimelineClientX(clientX)
   const edgeSize = 56
-  return clientX < rect.left + edgeSize || clientX > rect.right - edgeSize
+  return edgeClientX < rect.left + edgeSize || edgeClientX > rect.right - edgeSize
 }
 
 // 滚动已到头时的虚拟推进量：指针停在边缘仍能持续移动任务条，驱动时间轴继续扩展
-function horizontalEdgeNudge(clientX: number): number {
+function horizontalEdgeNudge(clientX: number, clientY: number): number {
+  if (!isInsideTimelineDragArea(clientY)) {
+    return 0
+  }
   const rect = timelineRef.value?.getBoundingClientRect()
   if (!rect || rect.width <= 0) {
     return 0
   }
+  const edgeClientX = clampTimelineClientX(clientX)
   const edgeSize = 56
   const maxStep = Math.max(4, Math.min(18, mergedConfig.value.columnWidth / 2))
-  if (clientX < rect.left + edgeSize) {
-    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - clientX) / edgeSize))
+  if (edgeClientX < rect.left + edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - edgeClientX) / edgeSize))
     return -Math.ceil(maxStep * ratio)
   }
-  if (clientX > rect.right - edgeSize) {
-    const ratio = Math.min(1, Math.max(0, (clientX - (rect.right - edgeSize)) / edgeSize))
+  if (edgeClientX > rect.right - edgeSize) {
+    const ratio = Math.min(1, Math.max(0, (edgeClientX - (rect.right - edgeSize)) / edgeSize))
     return Math.ceil(maxStep * ratio)
   }
   return 0
@@ -2228,9 +2277,6 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   event.preventDefault()
   event.stopPropagation()
 
-  const startX = event.clientX
-  const originalScrollLeft = scrollLeft.value
-  const originalTimelineStart = timelineStart.value.getTime()
   const columnWidth = mergedConfig.value.columnWidth
   const originalStart = toDate(task.actual.start)
   const originalEnd = toDate(task.actual.end)
@@ -2248,12 +2294,11 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   let previewFrame = 0
   let edgeScrollFrame = 0
   let pendingDeltaDays = 0
-  let lastClientX = startX
-  let edgeNudgePx = 0
+  let lastClientX = clampTimelineClientX(event.clientX)
+  let lastClientY = event.clientY
+  let dragDeltaPx = 0
 
-  const computeDeltaDays = (clientX: number) =>
-    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft + edgeNudgePx) / columnWidth)
-      + Math.round((timelineStart.value.getTime() - originalTimelineStart) / 86400000)
+  const computeDeltaDays = () => Math.round(dragDeltaPx / columnWidth)
 
   const queuePreview = (deltaDays: number) => {
     if (deltaDays === lastDeltaDays) {
@@ -2268,17 +2313,20 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
 
   const tickEdgeScroll = () => {
     edgeScrollFrame = 0
-    if (!horizontalEdgeScroll(lastClientX)) {
-      edgeNudgePx += horizontalEdgeNudge(lastClientX)
+    const scrollDeltaPx = horizontalEdgeScroll(lastClientX, lastClientY)
+    if (scrollDeltaPx) {
+      dragDeltaPx += scrollDeltaPx
+    } else {
+      dragDeltaPx += horizontalEdgeNudge(lastClientX, lastClientY)
     }
-    queuePreview(computeDeltaDays(lastClientX))
-    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX)) {
+    queuePreview(computeDeltaDays())
+    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
   }
 
   const ensureEdgeScroll = () => {
-    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX)) {
+    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
   }
@@ -2290,15 +2338,29 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   }
 
   const onMove = (moveEvent: PointerEvent) => {
-    lastClientX = moveEvent.clientX
-    horizontalEdgeScroll(lastClientX)
-    queuePreview(computeDeltaDays(lastClientX))
+    if (!isInsideTimelineDragArea(moveEvent.clientY)) {
+      return
+    }
+    const nextClientX = clampTimelineClientX(moveEvent.clientX)
+    dragDeltaPx += nextClientX - lastClientX
+    lastClientX = nextClientX
+    lastClientY = moveEvent.clientY
+    const scrollDeltaPx = horizontalEdgeScroll(moveEvent.clientX, moveEvent.clientY)
+    if (scrollDeltaPx) {
+      dragDeltaPx += scrollDeltaPx
+    }
+    queuePreview(computeDeltaDays())
     ensureEdgeScroll()
   }
 
   const onUp = (upEvent: PointerEvent) => {
-    lastClientX = upEvent.clientX
-    const deltaDays = computeDeltaDays(lastClientX)
+    if (isInsideTimelineDragArea(upEvent.clientY)) {
+      const nextClientX = clampTimelineClientX(upEvent.clientX)
+      dragDeltaPx += nextClientX - lastClientX
+      lastClientX = nextClientX
+      lastClientY = upEvent.clientY
+    }
+    const deltaDays = computeDeltaDays()
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
       previewFrame = 0
@@ -2368,9 +2430,6 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   event.preventDefault()
   event.stopPropagation()
 
-  const startX = event.clientX
-  const originalScrollLeft = scrollLeft.value
-  const originalTimelineStart = timelineStart.value.getTime()
   const columnWidth = mergedConfig.value.columnWidth
   const originalStart = toDate(task.plan.start)
   const originalEnd = toDate(task.plan.end)
@@ -2389,12 +2448,11 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   let previewFrame = 0
   let edgeScrollFrame = 0
   let pendingDeltaDays = 0
-  let lastClientX = startX
-  let edgeNudgePx = 0
+  let lastClientX = clampTimelineClientX(event.clientX)
+  let lastClientY = event.clientY
+  let dragDeltaPx = 0
 
-  const computeDeltaDays = (clientX: number) =>
-    Math.round((clientX - startX + scrollLeft.value - originalScrollLeft + edgeNudgePx) / columnWidth)
-      + Math.round((timelineStart.value.getTime() - originalTimelineStart) / 86400000)
+  const computeDeltaDays = () => Math.round(dragDeltaPx / columnWidth)
 
   const queuePreview = (deltaDays: number) => {
     if (deltaDays === lastDeltaDays) {
@@ -2409,17 +2467,20 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
 
   const tickEdgeScroll = () => {
     edgeScrollFrame = 0
-    if (!horizontalEdgeScroll(lastClientX)) {
-      edgeNudgePx += horizontalEdgeNudge(lastClientX)
+    const scrollDeltaPx = horizontalEdgeScroll(lastClientX, lastClientY)
+    if (scrollDeltaPx) {
+      dragDeltaPx += scrollDeltaPx
+    } else {
+      dragDeltaPx += horizontalEdgeNudge(lastClientX, lastClientY)
     }
-    queuePreview(computeDeltaDays(lastClientX))
-    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX)) {
+    queuePreview(computeDeltaDays())
+    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
   }
 
   const ensureEdgeScroll = () => {
-    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX)) {
+    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
   }
@@ -2436,15 +2497,29 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   }
 
   const onMove = (moveEvent: PointerEvent) => {
-    lastClientX = moveEvent.clientX
-    horizontalEdgeScroll(lastClientX)
-    queuePreview(computeDeltaDays(lastClientX))
+    if (!isInsideTimelineDragArea(moveEvent.clientY)) {
+      return
+    }
+    const nextClientX = clampTimelineClientX(moveEvent.clientX)
+    dragDeltaPx += nextClientX - lastClientX
+    lastClientX = nextClientX
+    lastClientY = moveEvent.clientY
+    const scrollDeltaPx = horizontalEdgeScroll(moveEvent.clientX, moveEvent.clientY)
+    if (scrollDeltaPx) {
+      dragDeltaPx += scrollDeltaPx
+    }
+    queuePreview(computeDeltaDays())
     ensureEdgeScroll()
   }
 
   const onUp = (upEvent: PointerEvent) => {
-    lastClientX = upEvent.clientX
-    const deltaDays = computeDeltaDays(lastClientX)
+    if (isInsideTimelineDragArea(upEvent.clientY)) {
+      const nextClientX = clampTimelineClientX(upEvent.clientX)
+      dragDeltaPx += nextClientX - lastClientX
+      lastClientX = nextClientX
+      lastClientY = upEvent.clientY
+    }
+    const deltaDays = computeDeltaDays()
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
       previewFrame = 0
@@ -2807,6 +2882,8 @@ defineExpose({
   enterFullscreen,
   exitFullscreen,
   toggleFullscreen,
+  openCreateTask: (type: GanttTask["type"] = "task") => openCreateEditor(type),
+  openCreateMarker,
   getEngine: () => engineRef.value
 })
 </script>

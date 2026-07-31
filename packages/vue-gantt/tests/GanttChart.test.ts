@@ -272,6 +272,234 @@ describe("GanttChart", () => {
     cancelAnimationFrame.mockRestore()
   })
 
+  it("keeps task dragging constrained to the timeline drag area", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        markers,
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    const rect = {
+      left: 300,
+      right: 900,
+      top: 40,
+      bottom: 560,
+      width: 600,
+      height: 520,
+      x: 300,
+      y: 40,
+      toJSON: () => ({})
+    } as DOMRect
+    const getBoundingClientRect = vi.spyOn(timeline, "getBoundingClientRect")
+      .mockReturnValue(rect)
+
+    const taskBar = wrapper.find(".gantt-bar.task")
+    const initialStyle = taskBar.attributes("style")
+    await taskBar.trigger("pointerdown", { clientX: 420, clientY: 120, pointerId: 1 })
+    await taskBar.trigger("pointermove", { clientX: 760, clientY: 700, pointerId: 1 })
+    await nextTick()
+
+    expect(rafCallbacks).toHaveLength(0)
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toBe(initialStyle)
+
+    await taskBar.trigger("pointermove", { clientX: 480, clientY: 120, pointerId: 1 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+
+    expect(wrapper.find(".gantt-bar.task").attributes("style")).toContain("translate(180px")
+
+    getBoundingClientRect.mockRestore()
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("keeps long edge drags smooth instead of jumping to the raw pointer distance", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        markers,
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-08-31" }
+        }
+      }
+    })
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    Object.defineProperty(timeline, "clientWidth", { configurable: true, value: 300 })
+    Object.defineProperty(timeline, "scrollWidth", { configurable: true, value: 1600 })
+    const rect = {
+      left: 300,
+      right: 600,
+      top: 40,
+      bottom: 560,
+      width: 300,
+      height: 520,
+      x: 300,
+      y: 40,
+      toJSON: () => ({})
+    } as DOMRect
+    const getBoundingClientRect = vi.spyOn(timeline, "getBoundingClientRect")
+      .mockReturnValue(rect)
+    const actualLeft = () => {
+      const style = wrapper.find(".gantt-bar.task").attributes("style") ?? ""
+      return Number(style.match(/translate\(([-\d.]+)px/)?.[1] ?? 0)
+    }
+
+    const taskBar = wrapper.find(".gantt-bar.task")
+    const initialLeft = actualLeft()
+    await taskBar.trigger("pointerdown", { clientX: 420, clientY: 120, pointerId: 1 })
+    await taskBar.trigger("pointermove", { clientX: 2000, clientY: 120, pointerId: 1 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+
+    const firstPreviewLeft = actualLeft()
+    expect(firstPreviewLeft).toBeGreaterThan(initialLeft)
+    expect(firstPreviewLeft - initialLeft).toBeLessThanOrEqual(240)
+
+    const observedLefts = [firstPreviewLeft]
+    for (let frame = 0; frame < 4; frame++) {
+      rafCallbacks.shift()?.(32 + frame * 16)
+      rafCallbacks.shift()?.(40 + frame * 16)
+      await nextTick()
+      observedLefts.push(actualLeft())
+    }
+
+    for (let index = 1; index < observedLefts.length; index++) {
+      expect(observedLefts[index]).toBeGreaterThanOrEqual(observedLefts[index - 1])
+      expect(observedLefts[index] - observedLefts[index - 1]).toBeLessThanOrEqual(60)
+    }
+
+    getBoundingClientRect.mockRestore()
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("does not reinterpret scrollbar compensation as extra drag distance", async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        markers,
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-07-01", end: "2026-08-31" }
+        }
+      }
+    })
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    Object.defineProperty(timeline, "clientWidth", { configurable: true, value: 300 })
+    Object.defineProperty(timeline, "scrollWidth", { configurable: true, value: 1600 })
+    const rect = {
+      left: 300,
+      right: 600,
+      top: 40,
+      bottom: 560,
+      width: 300,
+      height: 520,
+      x: 300,
+      y: 40,
+      toJSON: () => ({})
+    } as DOMRect
+    const getBoundingClientRect = vi.spyOn(timeline, "getBoundingClientRect")
+      .mockReturnValue(rect)
+    const actualLeft = () => {
+      const style = wrapper.find(".gantt-bar.task").attributes("style") ?? ""
+      return Number(style.match(/translate\(([-\d.]+)px/)?.[1] ?? 0)
+    }
+
+    const taskBar = wrapper.find(".gantt-bar.task")
+    await taskBar.trigger("pointerdown", { clientX: 420, clientY: 120, pointerId: 1 })
+    await taskBar.trigger("pointermove", { clientX: 480, clientY: 120, pointerId: 1 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+
+    const previewLeft = actualLeft()
+    timeline.scrollLeft = 720
+    await wrapper.find(".gantt-timeline").trigger("scroll")
+    await taskBar.trigger("pointermove", { clientX: 480, clientY: 120, pointerId: 1 })
+    await nextTick()
+
+    expect(actualLeft()).toBe(previewLeft)
+
+    getBoundingClientRect.mockRestore()
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
+  it("clamps scrollLeft while a drag preview shrinks after a far-right extension", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        markers,
+        config: {
+          viewMode: "day",
+          columnWidth: 30
+        }
+      }
+    })
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    Object.defineProperty(timeline, "clientWidth", { configurable: true, value: 360 })
+    const engine = (wrapper.vm as unknown as { getEngine: () => { setPreview: (preview: unknown) => void } | null }).getEngine()
+
+    engine?.setPreview({
+      taskId: "task-1",
+      patch: {
+        actualStart: "2026-10-01",
+        actualEnd: "2026-10-08"
+      }
+    })
+    await nextTick()
+
+    timeline.scrollLeft = 1600
+    await wrapper.find(".gantt-timeline").trigger("scroll")
+    await nextTick()
+    expect(timeline.scrollLeft).toBe(1600)
+
+    engine?.setPreview({
+      taskId: "task-1",
+      patch: {
+        actualStart: "2026-07-02",
+        actualEnd: "2026-07-09"
+      }
+    })
+    await nextTick()
+    await nextTick()
+
+    const timelineWidth = Number.parseFloat(wrapper.find(".gantt-timeline-inner").attributes("style")?.match(/width:\s*([\d.]+)px/)?.[1] ?? "0")
+    expect(timeline.scrollLeft).toBeLessThanOrEqual(Math.max(0, timelineWidth - 360))
+  })
+
   it("keeps summary bars read-only because they are rolled up from child tasks", async () => {
     const wrapper = mount(GanttChart, {
       props: {

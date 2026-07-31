@@ -213,7 +213,8 @@
 
 .gantt-table-scroll {
   height: 100%;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-color: #c4cbd6 transparent;
   scrollbar-width: thin;
 }
@@ -2121,4 +2122,3 @@ body.gantt-dialog-open {
     grid-template-columns: 190px 64px 56px repeat(4, 68px) 98px;
   }
 }
-
