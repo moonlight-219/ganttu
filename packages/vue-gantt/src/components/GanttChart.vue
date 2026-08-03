@@ -2884,9 +2884,25 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
 
   const queuePreview = () => {
     const session = dragSession.value
-    if (!session || session.taskId !== task.id || session.deltaDays === lastPreviewDeltaDays) return
-    lastPreviewDeltaDays = session.deltaDays
-    pendingDeltaDays = session.deltaDays
+    if (!session || session.taskId !== task.id) return
+
+    const requestedDeltaDays = session.deltaDays
+    const requestedPatch = buildPlanDragPatch(task, mode, originalStart, originalEnd, requestedDeltaDays)
+    const constrainedPatch = clampPlanPatchByDependencies(task, requestedPatch, mode)
+    const effectiveDeltaDays = patchDeltaDays(
+      constrainedPatch,
+      mode,
+      originalStart,
+      originalEnd,
+      "plan"
+    )
+    if (effectiveDeltaDays !== requestedDeltaDays) {
+      updateDragSessionVisual(effectiveDeltaDays)
+    }
+    if (effectiveDeltaDays === lastPreviewDeltaDays) return
+
+    lastPreviewDeltaDays = effectiveDeltaDays
+    pendingDeltaDays = requestedDeltaDays
     if (!previewFrame) {
       previewFrame = window.requestAnimationFrame(flushPreview)
     }

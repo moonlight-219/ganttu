@@ -1629,6 +1629,99 @@ describe("GanttChart", () => {
     expect(wrapper.emitted("taskChange")).toBeUndefined()
   })
 
+  it("keeps a dependency-constrained plan bar visually stable before preview RAF", async () => {
+    const frameCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      })
+    const cancelAnimationFrame = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    const linkedTasks: GanttTask[] = [
+      {
+        id: "source",
+        name: "Source",
+        type: "task",
+        plan: { start: "2026-07-01", end: "2026-07-05" },
+        actual: { start: "2026-07-01", end: "2026-07-05", progress: 50 }
+      },
+      {
+        id: "target",
+        name: "Target",
+        type: "task",
+        plan: { start: "2026-07-06", end: "2026-07-08" },
+        actual: { start: "2026-07-06", end: "2026-07-08", progress: 20 }
+      }
+    ]
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkedTasks,
+        links: [{ id: "l1", sourceId: "source", targetId: "target", type: "FS" }],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          editablePlan: true,
+          visibleRange: { start: "2026-07-01", end: "2026-07-31" }
+        }
+      }
+    })
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    Object.defineProperty(timeline, "clientWidth", { configurable: true, value: 1000 })
+    Object.defineProperty(timeline, "scrollWidth", { configurable: true, value: 1800 })
+    vi.spyOn(timeline, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 600,
+      width: 1000,
+      height: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    } as DOMRect)
+    frameCallbacks.length = 0
+
+    const targetPlanBar = wrapper.findAll(".gantt-plan-bar.task")[1]
+    const initialStyle = targetPlanBar.attributes("style") ?? ""
+    const initialLeft = Number(initialStyle.match(/translate\((-?[\d.]+)px/)?.[1] ?? 0)
+    const initialWidth = Number(initialStyle.match(/width:\s*([\d.]+)px/)?.[1] ?? 0)
+    const startClientX = initialLeft + initialWidth / 2
+    const overlayLeft = () => {
+      const match = targetPlanBar.attributes("style")?.match(/left:\s*(-?[\d.]+)px/)
+      return match ? Number(match[1]) : Number.NaN
+    }
+    const flushFrames = async () => {
+      while (frameCallbacks.length) {
+        frameCallbacks.shift()?.(performance.now())
+      }
+      await nextTick()
+    }
+
+    await targetPlanBar.trigger("pointerdown", { clientX: startClientX, clientY: 120, pointerId: 1 })
+    await targetPlanBar.trigger("pointermove", { clientX: startClientX - 30, clientY: 120, pointerId: 1 })
+    await nextTick()
+    const constrainedLeft = overlayLeft()
+    expect(Number.isFinite(constrainedLeft)).toBe(true)
+
+    await targetPlanBar.trigger("pointermove", { clientX: startClientX - 60, clientY: 120, pointerId: 1 })
+    await nextTick()
+    expect(overlayLeft()).toBe(constrainedLeft)
+
+    await flushFrames()
+    expect(overlayLeft()).toBe(constrainedLeft)
+
+    await targetPlanBar.trigger("pointercancel", {
+      clientX: startClientX - 60,
+      clientY: 120,
+      pointerId: 1
+    })
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
+  })
+
   it("keeps plan and actual bar colors independent", () => {
     const coloredTask: GanttTask = {
       ...tasks[1],
