@@ -171,6 +171,31 @@ const linkEditDraft = ref({
   lagUnit: "calendar" as NonNullable<GanttLink["lagUnit"]>
 })
 const draggingTask = ref(false)
+type DragSession = {
+  taskId: string
+  kind: "actual" | "plan"
+  mode: "move" | "start" | "end"
+  pointerId: number
+  startClientX: number
+  currentClientX: number
+  currentClientY: number
+  grabOffset: number
+  initialViewportLeft: number
+  initialWidth: number
+  viewportLeft: number
+  width: number
+  minWidth: number
+  fixedTop: number
+  panPx: number
+  pendingPanPx: number
+  deltaDays: number
+  accountedScrollLeft: number
+  status: "dragging" | "committing"
+}
+const dragSession = ref<DragSession | null>(null)
+const navigationRange = ref<{ start: Date; end: Date } | null>(null)
+let stopActiveDrag: (() => void) | null = null
+let queueActiveDragPreview: (() => void) | null = null
 const dragPreview = ref<{
   taskId: string
   patch: PatchTask
@@ -218,6 +243,15 @@ watch(() => props.links, (links) => {
 watch(() => props.markers, (markers) => {
   engineRef.value?.setMarkers(markers)
 }, { deep: true })
+watch(
+  () => props.config?.visibleRange,
+  (range) => {
+    navigationRange.value = range
+      ? { start: toDate(range.start), end: toDate(range.end) }
+      : null
+  },
+  { immediate: true, deep: true }
+)
 function cssSize(value: string | number | undefined, fallback: string): string {
   if (typeof value === "number") return `${value}px`
   return value || fallback
@@ -299,33 +333,33 @@ const parentSelectOptions = computed<GanttSelectOption[]>(() => [
   }))
 ])
 const dateRange = computed(() => {
-  if (mergedConfig.value.visibleRange) {
-    return {
-      start: toDate(mergedConfig.value.visibleRange.start),
-      end: toDate(mergedConfig.value.visibleRange.end)
-    }
+  const configuredRange = mergedConfig.value.visibleRange
+  const dates = configuredRange
+    ? [toDate(configuredRange.start), toDate(configuredRange.end)]
+    : [
+        ...baseDisplayedTasks.value.flatMap((task) => [
+          toDate(task.plan.start),
+          toDate(task.plan.end),
+          toDate(task.actual.start),
+          toDate(task.actual.end)
+        ]),
+        ...props.markers.map((marker) => toDate(marker.date))
+      ]
+  if (navigationRange.value) {
+    dates.push(navigationRange.value.start, navigationRange.value.end)
   }
-
-  const dates = [
-    ...baseDisplayedTasks.value.flatMap((task) => [
-      toDate(task.plan.start),
-      toDate(task.plan.end),
-      toDate(task.actual.start),
-      toDate(task.actual.end)
-    ]),
-    ...props.markers.map((marker) => toDate(marker.date))
-  ]
   // 拖拽中范围只扩不缩：在原始范围上叠加预览日期，避免拖动途中时间轴两端被提前裁剪
   const preview = dragPreview.value
   if (preview) {
     for (const id of [preview.taskId, ...Object.keys(preview.affected ?? {})]) {
       const task = taskById.value.get(id)
       if (task) {
+        const displayTask = applyPreviewPatchToTask(task)
         dates.push(
-          toDate(task.plan.start),
-          toDate(task.plan.end),
-          toDate(task.actual.start),
-          toDate(task.actual.end)
+          toDate(displayTask.plan.start),
+          toDate(displayTask.plan.end),
+          toDate(displayTask.actual.start),
+          toDate(displayTask.actual.end)
         )
       }
     }
@@ -342,9 +376,6 @@ const dateRange = computed(() => {
 })
 // 数据跨度不足以铺满视口宽度时，向右补足日期列，避免时间轴右侧出现无表头无网格的留白
 function padDateRangeToViewport(range: { start: Date; end: Date }): { start: Date; end: Date } {
-  if (mergedConfig.value.fitTimelineToViewport === false) {
-    return range
-  }
   const viewportWidth = viewportSize.value.width
   const columnWidth = mergedConfig.value.columnWidth
   if (viewportWidth <= 0 || columnWidth <= 0) {
@@ -657,7 +688,7 @@ watch([scale, layouts, scrollLeft, scrollTop, taskListWidth], () => {
 // 拖拽预览把时间轴向左扩展时，timelineStart 前移会使所有内容坐标整体右移，
 // 需同步补偿滚动位置，避免视口内容跳动、被拖拽条钉在最左端不跟手
 watch(timelineStart, (next, prev) => {
-  if (!draggingTask.value || !timelineRef.value) {
+  if (!timelineRef.value) {
     return
   }
   const shiftPx = Math.round((prev.getTime() - next.getTime()) / 86400000) * mergedConfig.value.columnWidth
@@ -667,6 +698,10 @@ watch(timelineStart, (next, prev) => {
   const timeline = timelineRef.value
   timeline.scrollLeft += shiftPx
   scrollLeft.value = timeline.scrollLeft
+  if (dragSession.value) {
+    dragSession.value.accountedScrollLeft = timeline.scrollLeft
+    applyPendingDragPan()
+  }
 }, { flush: "post" })
 
 // 拖拽预览清除（松手/取消）后 timeline 收缩，scrollLeft 可能超出新的 totalWidth 边界，
@@ -684,8 +719,11 @@ function clampTimelineScrollLeft() {
 }
 
 watch([totalWidth, () => viewportSize.value.width], () => {
-  clampTimelineScrollLeft()
-  nextTick(drawCanvas)
+  nextTick(() => {
+    applyPendingDragPan()
+    clampTimelineScrollLeft()
+    drawCanvas()
+  })
 }, { flush: "post" })
 
 function finishDragRender() {
@@ -741,6 +779,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopActiveDrag?.()
   engineRef.value?.destroy()
   engineRef.value = null
   document.removeEventListener("fullscreenchange", syncFullscreenState)
@@ -1314,6 +1353,16 @@ function taskDurationDays(start: string | Date, end: string | Date): number {
 
 function syncScroll(event: Event) {
   const target = event.target as HTMLDivElement
+  const session = dragSession.value
+  if (session?.status === "dragging") {
+    const scrollDeltaPx = target.scrollLeft - session.accountedScrollLeft
+    if (scrollDeltaPx) {
+      session.panPx += scrollDeltaPx
+      session.accountedScrollLeft = target.scrollLeft
+      updateDragSessionVisual()
+      queueActiveDragPreview?.()
+    }
+  }
   scrollLeft.value = target.scrollLeft
   scrollTop.value = target.scrollTop
   if (tableRef.value && tableRef.value.scrollTop !== target.scrollTop) {
@@ -1332,9 +1381,22 @@ function syncTableScroll(event: Event) {
   }
 }
 
-function timelineDragRect(): DOMRect | null {
-  const rect = timelineRef.value?.getBoundingClientRect()
-  return rect && rect.width > 0 && rect.height > 0 ? rect : null
+function timelineDragRect() {
+  const timeline = timelineRef.value
+  const rect = timeline?.getBoundingClientRect()
+  if (!timeline || !rect || rect.width <= 0 || rect.height <= 0) {
+    return null
+  }
+  const width = timeline.clientWidth || rect.width
+  const height = timeline.clientHeight || rect.height
+  return {
+    left: rect.left,
+    right: rect.left + width,
+    top: rect.top,
+    bottom: rect.top + height,
+    width,
+    height
+  }
 }
 
 function isInsideTimelineDragArea(clientY: number): boolean {
@@ -1350,43 +1412,11 @@ function clampTimelineClientX(clientX: number): number {
   return Math.min(rect.right, Math.max(rect.left, clientX))
 }
 
-function horizontalEdgeScroll(clientX: number, clientY: number): number {
-  const timeline = timelineRef.value
-  if (!timeline || !isInsideTimelineDragArea(clientY)) {
-    return 0
-  }
-  const rect = timeline.getBoundingClientRect()
-  if (rect.width <= 0) {
-    return 0
-  }
-  const edgeClientX = clampTimelineClientX(clientX)
-  const edgeSize = 56
-  const maxStep = Math.max(4, Math.min(18, mergedConfig.value.columnWidth / 2))
-  const previousScrollLeft = timeline.scrollLeft
-  let nextScrollLeft = previousScrollLeft
-
-  if (edgeClientX < rect.left + edgeSize) {
-    const ratio = Math.min(1, Math.max(0, (rect.left + edgeSize - edgeClientX) / edgeSize))
-    nextScrollLeft = Math.max(0, previousScrollLeft - Math.ceil(maxStep * ratio))
-  } else if (edgeClientX > rect.right - edgeSize) {
-    const ratio = Math.min(1, Math.max(0, (edgeClientX - (rect.right - edgeSize)) / edgeSize))
-    const maxScrollLeft = Math.max(0, timeline.scrollWidth - timeline.clientWidth)
-    nextScrollLeft = Math.min(maxScrollLeft, previousScrollLeft + Math.ceil(maxStep * ratio))
-  }
-
-  if (nextScrollLeft === previousScrollLeft) {
-    return 0
-  }
-  timeline.scrollLeft = nextScrollLeft
-  scrollLeft.value = nextScrollLeft
-  return nextScrollLeft - previousScrollLeft
-}
-
 function isNearTimelineHorizontalEdge(clientX: number, clientY: number): boolean {
   if (!isInsideTimelineDragArea(clientY)) {
     return false
   }
-  const rect = timelineRef.value?.getBoundingClientRect()
+  const rect = timelineDragRect()
   if (!rect) {
     return false
   }
@@ -1399,11 +1429,11 @@ function isNearTimelineHorizontalEdge(clientX: number, clientY: number): boolean
 }
 
 // 滚动已到头时的虚拟推进量：指针停在边缘仍能持续移动任务条，驱动时间轴继续扩展
-function horizontalEdgeNudge(clientX: number, clientY: number): number {
+function horizontalEdgeStep(clientX: number, clientY: number): number {
   if (!isInsideTimelineDragArea(clientY)) {
     return 0
   }
-  const rect = timelineRef.value?.getBoundingClientRect()
+  const rect = timelineDragRect()
   if (!rect || rect.width <= 0) {
     return 0
   }
@@ -1419,6 +1449,34 @@ function horizontalEdgeNudge(clientX: number, clientY: number): number {
     return Math.ceil(maxStep * ratio)
   }
   return 0
+}
+
+function panActiveDrag(stepPx: number) {
+  const session = dragSession.value
+  if (!session || !stepPx) {
+    return
+  }
+  session.panPx += stepPx
+  session.pendingPanPx += stepPx
+  applyPendingDragPan()
+  updateDragSessionVisual()
+  queueActiveDragPreview?.()
+}
+
+function applyPendingDragPan() {
+  const session = dragSession.value
+  const timeline = timelineRef.value
+  if (!session || !timeline || !session.pendingPanPx) {
+    return
+  }
+  const maxScrollLeft = Math.max(0, timeline.scrollWidth - timeline.clientWidth)
+  const previousScrollLeft = timeline.scrollLeft
+  const nextScrollLeft = Math.min(maxScrollLeft, Math.max(0, previousScrollLeft + session.pendingPanPx))
+  const appliedPanPx = nextScrollLeft - previousScrollLeft
+  session.pendingPanPx -= appliedPanPx
+  session.accountedScrollLeft = nextScrollLeft
+  timeline.scrollLeft = nextScrollLeft
+  scrollLeft.value = nextScrollLeft
 }
 
 function updateLinkDraft(event: PointerEvent) {
@@ -2089,15 +2147,144 @@ function fullscreenElement() {
   return chartRef.value?.closest<HTMLElement>("[data-gantt-fullscreen-root]") ?? chartRef.value
 }
 
+function timelineViewportWidth() {
+  const rect = timelineDragRect()
+  return rect?.width || timelineRef.value?.clientWidth || 0
+}
+
+function beginDragSession(
+  event: PointerEvent,
+  taskId: string,
+  kind: "actual" | "plan",
+  mode: "move" | "start" | "end",
+  left: number,
+  width: number,
+  minWidth: number,
+  fixedTop: number
+) {
+  const rect = timelineDragRect()
+  const startClientX = clampTimelineClientX(event.clientX)
+  const initialViewportLeft = left - scrollLeft.value
+  const grabOffset = mode === "start"
+    ? 0
+    : mode === "end"
+      ? width
+      : Math.min(width, Math.max(0, startClientX - (rect?.left ?? 0) - initialViewportLeft))
+  dragSession.value = {
+    taskId,
+    kind,
+    mode,
+    pointerId: event.pointerId,
+    startClientX,
+    currentClientX: startClientX,
+    currentClientY: event.clientY,
+    grabOffset,
+    initialViewportLeft,
+    initialWidth: width,
+    viewportLeft: initialViewportLeft,
+    width,
+    minWidth,
+    fixedTop,
+    panPx: 0,
+    pendingPanPx: 0,
+    deltaDays: 0,
+    accountedScrollLeft: timelineRef.value?.scrollLeft ?? scrollLeft.value,
+    status: "dragging"
+  }
+}
+
+function updateDragSessionVisual(forcedDeltaDays?: number) {
+  const session = dragSession.value
+  if (!session) {
+    return
+  }
+  const columnWidth = mergedConfig.value.columnWidth
+  const viewportWidth = timelineViewportWidth()
+  const pointerDeltaPx = session.currentClientX - session.startClientX
+
+  if (session.mode === "move") {
+    const rect = timelineDragRect()
+    const desiredLeft = forcedDeltaDays === undefined
+      ? session.currentClientX - (rect?.left ?? 0) - session.grabOffset
+      : session.initialViewportLeft + forcedDeltaDays * columnWidth - session.panPx
+    if (viewportWidth <= 0) {
+      session.viewportLeft = forcedDeltaDays === undefined
+        ? session.initialViewportLeft + pointerDeltaPx
+        : desiredLeft
+      session.width = session.initialWidth
+      session.deltaDays = forcedDeltaDays ?? Math.round((pointerDeltaPx + session.panPx) / columnWidth)
+      return
+    }
+    const minLeft = session.width > viewportWidth ? viewportWidth - session.width : 0
+    const maxLeft = session.width > viewportWidth ? 0 : viewportWidth - session.width
+    session.viewportLeft = Math.min(maxLeft, Math.max(minLeft, desiredLeft))
+    session.width = session.initialWidth
+    if (forcedDeltaDays === undefined) {
+      const visualDeltaPx = session.viewportLeft - session.initialViewportLeft
+      session.deltaDays = Math.round((visualDeltaPx + session.panPx) / columnWidth)
+    } else {
+      const snapPanPx = desiredLeft - session.viewportLeft
+      session.deltaDays = forcedDeltaDays
+      if (snapPanPx) {
+        session.panPx += snapPanPx
+        session.pendingPanPx += snapPanPx
+        applyPendingDragPan()
+      }
+    }
+  } else if (session.mode === "start") {
+    const worldDeltaPx = forcedDeltaDays === undefined
+      ? pointerDeltaPx + session.panPx
+      : forcedDeltaDays * columnWidth
+    session.deltaDays = forcedDeltaDays ?? Math.round(worldDeltaPx / columnWidth)
+    session.width = Math.max(session.minWidth, session.initialWidth - worldDeltaPx)
+    session.viewportLeft = Math.max(
+      0,
+      Math.min(viewportWidth - session.minWidth, session.initialViewportLeft + session.initialWidth - session.width)
+    )
+  } else {
+    const worldDeltaPx = forcedDeltaDays === undefined
+      ? pointerDeltaPx + session.panPx
+      : forcedDeltaDays * columnWidth
+    session.deltaDays = forcedDeltaDays ?? Math.round(worldDeltaPx / columnWidth)
+    session.width = Math.max(session.minWidth, session.initialWidth + worldDeltaPx)
+    session.viewportLeft = session.initialViewportLeft + session.width > viewportWidth
+      ? viewportWidth - session.width
+      : session.initialViewportLeft
+  }
+}
+
+function activeDragFor(taskId: string, kind: "actual" | "plan") {
+  const session = dragSession.value
+  return session?.taskId === taskId && session.kind === kind ? session : null
+}
+
+function dragViewportStyle(session: DragSession) {
+  const rect = timelineDragRect()
+  const absoluteLeft = (rect?.left ?? 0) + session.viewportLeft
+  const clipLeft = rect ? Math.max(0, rect.left - absoluteLeft) : 0
+  const clipRight = rect ? Math.max(0, absoluteLeft + session.width - rect.right) : 0
+  return {
+    position: "fixed" as const,
+    zIndex: 30,
+    left: `${absoluteLeft}px`,
+    top: `${session.fixedTop}px`,
+    clipPath: session.width > 0 ? `inset(0 ${clipRight}px 0 ${clipLeft}px)` : undefined,
+    transform: "none"
+  }
+}
+
 function taskStyle(layout: TaskLayout, task: GanttTask) {
   const hasPreview = dragPreview.value?.taskId === task.id
+  const activeVisual = activeDragFor(task.id, "actual")
   const displayTask = previewTask(task)
   const actualStart = toDate(displayTask.actual.start)
   const actualEnd = toDate(displayTask.actual.end)
   const left = hasPreview
     ? Math.round((actualStart.getTime() - timelineStart.value.getTime()) / 86400000) * mergedConfig.value.columnWidth
     : layout.left
-  const width = hasPreview
+  const width = activeVisual
+    ? activeVisual.width
+    : hasPreview
     ? Math.max(
         displayTask.type === "milestone" ? mergedConfig.value.columnWidth / 2 : mergedConfig.value.columnWidth,
         taskDurationDays(actualStart, actualEnd) * mergedConfig.value.columnWidth
@@ -2112,7 +2299,8 @@ function taskStyle(layout: TaskLayout, task: GanttTask) {
     ? viewportHeight.value
     : displayTask.type === "summary" ? 8 : ACTUAL_BAR_HEIGHT
   return {
-    transform: `translate(${left}px, ${top}px)`,
+    ...(activeVisual ? dragViewportStyle(activeVisual) : {}),
+    transform: activeVisual ? "none" : `translate(${left}px, ${top}px)`,
     width: displayTask.type === "milestone" ? "0px" : `${width}px`,
     height: `${height}px`,
     "--bar-color": actualTaskColor(displayTask),
@@ -2121,18 +2309,22 @@ function taskStyle(layout: TaskLayout, task: GanttTask) {
 }
 
 function planBarStyle(layout: TaskLayout, task: GanttTask) {
+  const activeVisual = activeDragFor(task.id, "plan")
   const displayTask = previewTask(task)
   const start = toDate(displayTask.plan.start)
   const end = toDate(displayTask.plan.end)
   const dayWidth = mergedConfig.value.columnWidth
   const left = Math.round((start.getTime() - timelineStart.value.getTime()) / 86400000) * dayWidth
-  const width = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
+  const width = activeVisual
+    ? activeVisual.width
+    : Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
   const rowTop = layout.top - mergedConfig.value.headerHeight
   const { planTop } = barVerticalMetrics()
   const planColor = displayTask.planColor || defaultPlanColor()
 
   return {
-    transform: `translate(${left}px, ${rowTop + planTop}px)`,
+    ...(activeVisual ? dragViewportStyle(activeVisual) : {}),
+    transform: activeVisual ? "none" : `translate(${left}px, ${rowTop + planTop}px)`,
     width: `${width}px`,
     height: `${PLAN_BAR_HEIGHT}px`,
     "--bar-color": planColor,
@@ -2255,23 +2447,59 @@ function shouldIgnoreBarMove(event: PointerEvent, mode: "move" | "start" | "end"
   return Boolean(target?.closest(".gantt-resize, .gantt-plan-resize, .gantt-link-handle"))
 }
 
+function patchDeltaDays(
+  patch: PatchTask,
+  mode: "move" | "start" | "end",
+  originalStart: Date,
+  originalEnd: Date,
+  kind: "actual" | "plan"
+) {
+  const start = kind === "actual" ? patch.actualStart : patch.planStart
+  const end = kind === "actual" ? patch.actualEnd : patch.planEnd
+  const anchor = mode === "end" ? end : start
+  const original = mode === "end" ? originalEnd : originalStart
+  return anchor ? Math.round((toDate(anchor).getTime() - original.getTime()) / 86400000) : 0
+}
+
+function extendNavigationRange(patch: PatchTask) {
+  const dates = [patch.planStart, patch.planEnd, patch.actualStart, patch.actualEnd]
+    .filter((date): date is string | Date => Boolean(date))
+    .map(toDate)
+  if (!dates.length) {
+    return
+  }
+  const current = navigationRange.value ?? dateRange.value
+  navigationRange.value = {
+    start: new Date(Math.min(current.start.getTime(), ...dates.map((date) => date.getTime()))),
+    end: new Date(Math.max(current.end.getTime(), ...dates.map((date) => date.getTime())))
+  }
+}
+
+function fixedBarTop(element: HTMLElement, fallback: number) {
+  const rect = element.getBoundingClientRect()
+  return rect.height > 0 || rect.top !== 0 ? rect.top : fallback
+}
+
+async function finishDragOverlay(session: DragSession, element: HTMLElement) {
+  await nextTick()
+  applyPendingDragPan()
+  await nextTick()
+  if (dragSession.value === session) {
+    dragSession.value = null
+  }
+  element.classList.remove("dragging", "gantt-drag-overlay")
+}
+
 function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" | "end") {
-  if (shouldIgnoreBarMove(event, mode)) {
-    return
-  }
-  if (mergedConfig.value.editable === false || mergedConfig.value.editableActual === false) {
-    return
-  }
-  if (draggingTask.value) {
-    return
-  }
-  if (task.type === "summary") {
-    return
-  }
-  if (linkDraft.value) {
-    return
-  }
-  if (task.type === "milestone" && mode !== "move") {
+  if (
+    shouldIgnoreBarMove(event, mode)
+    || mergedConfig.value.editable === false
+    || mergedConfig.value.editableActual === false
+    || draggingTask.value
+    || task.type === "summary"
+    || linkDraft.value
+    || (task.type === "milestone" && mode !== "move")
+  ) {
     return
   }
   event.preventDefault()
@@ -2282,149 +2510,145 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
   const originalEnd = toDate(task.actual.end)
   const target = event.currentTarget as HTMLElement
   const previewElement = target.closest(".gantt-bar") as HTMLElement | null
-  if (!previewElement || !layoutById.value.has(task.id)) {
+  const rowLayout = layoutById.value.get(task.id)
+  const timelineRect = timelineDragRect()
+  if (!previewElement || !rowLayout) {
     return
   }
+  const rowTop = rowLayout.top - mergedConfig.value.headerHeight
+  const { actualTop } = barVerticalMetrics()
+  const fallbackTop = (timelineRect?.top ?? 0) + mergedConfig.value.headerHeight + rowTop + actualTop - scrollTop.value
+  const dragLeft = Math.round((originalStart.getTime() - timelineStart.value.getTime()) / 86400000) * columnWidth
+  const dragWidth = task.type === "milestone"
+    ? columnWidth / 2
+    : taskDurationDays(originalStart, originalEnd) * columnWidth
+
   target.setPointerCapture?.(event.pointerId)
   selectedTaskId.value = task.id
   draggingTask.value = true
-  previewElement.classList.add("dragging")
+  beginDragSession(
+    event,
+    task.id,
+    "actual",
+    mode,
+    dragLeft,
+    dragWidth,
+    task.type === "milestone" ? columnWidth / 2 : columnWidth,
+    fixedBarTop(previewElement, fallbackTop)
+  )
+  previewElement.classList.add("dragging", "gantt-drag-overlay")
   hideTaskDetails()
-  let lastDeltaDays = 0
+
   let previewFrame = 0
   let edgeScrollFrame = 0
   let pendingDeltaDays = 0
-  let lastClientX = clampTimelineClientX(event.clientX)
-  let lastClientY = event.clientY
-  let dragDeltaPx = 0
-
-  const computeDeltaDays = () => Math.round(dragDeltaPx / columnWidth)
-
-  const queuePreview = (deltaDays: number) => {
-    if (deltaDays === lastDeltaDays) {
-      return
-    }
-    lastDeltaDays = deltaDays
-    pendingDeltaDays = deltaDays
-    if (!previewFrame) {
-      previewFrame = window.requestAnimationFrame(flushPreview)
-    }
-  }
-
-  const tickEdgeScroll = () => {
-    edgeScrollFrame = 0
-    const scrollDeltaPx = horizontalEdgeScroll(lastClientX, lastClientY)
-    if (scrollDeltaPx) {
-      dragDeltaPx += scrollDeltaPx
-    } else {
-      dragDeltaPx += horizontalEdgeNudge(lastClientX, lastClientY)
-    }
-    queuePreview(computeDeltaDays())
-    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
-      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
-    }
-  }
-
-  const ensureEdgeScroll = () => {
-    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
-      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
-    }
-  }
+  let lastPreviewDeltaDays = 0
 
   const flushPreview = () => {
     previewFrame = 0
     const patch = buildDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays)
+    extendNavigationRange(patch)
     engineRef.value?.setPreview({ taskId: task.id, patch })
   }
-
-  const onMove = (moveEvent: PointerEvent) => {
-    if (!isInsideTimelineDragArea(moveEvent.clientY)) {
+  const queuePreview = () => {
+    const session = dragSession.value
+    if (!session || session.taskId !== task.id || session.deltaDays === lastPreviewDeltaDays) {
       return
     }
-    const nextClientX = clampTimelineClientX(moveEvent.clientX)
-    dragDeltaPx += nextClientX - lastClientX
-    lastClientX = nextClientX
-    lastClientY = moveEvent.clientY
-    const scrollDeltaPx = horizontalEdgeScroll(moveEvent.clientX, moveEvent.clientY)
-    if (scrollDeltaPx) {
-      dragDeltaPx += scrollDeltaPx
+    lastPreviewDeltaDays = session.deltaDays
+    pendingDeltaDays = session.deltaDays
+    if (!previewFrame) {
+      previewFrame = window.requestAnimationFrame(flushPreview)
     }
-    queuePreview(computeDeltaDays())
-    ensureEdgeScroll()
   }
+  queueActiveDragPreview = queuePreview
 
-  const onUp = (upEvent: PointerEvent) => {
-    if (isInsideTimelineDragArea(upEvent.clientY)) {
-      const nextClientX = clampTimelineClientX(upEvent.clientX)
-      dragDeltaPx += nextClientX - lastClientX
-      lastClientX = nextClientX
-      lastClientY = upEvent.clientY
+  const tickEdgeScroll = () => {
+    edgeScrollFrame = 0
+    const session = dragSession.value
+    if (!session || session.status !== "dragging") {
+      return
     }
-    const deltaDays = computeDeltaDays()
-    if (previewFrame) {
-      window.cancelAnimationFrame(previewFrame)
-      previewFrame = 0
+    panActiveDrag(horizontalEdgeStep(session.currentClientX, session.currentClientY))
+    if (isNearTimelineHorizontalEdge(session.currentClientX, session.currentClientY)) {
+      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
-    if (edgeScrollFrame) {
-      window.cancelAnimationFrame(edgeScrollFrame)
-      edgeScrollFrame = 0
+  }
+  const ensureEdgeScroll = () => {
+    const session = dragSession.value
+    if (session && !edgeScrollFrame && isNearTimelineHorizontalEdge(session.currentClientX, session.currentClientY)) {
+      edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
+  }
+  const cleanup = (keepOverlay = false) => {
+    if (previewFrame) window.cancelAnimationFrame(previewFrame)
+    if (edgeScrollFrame) window.cancelAnimationFrame(edgeScrollFrame)
+    previewFrame = 0
+    edgeScrollFrame = 0
     target.releasePointerCapture?.(event.pointerId)
     target.removeEventListener("pointermove", onMove)
     target.removeEventListener("pointerup", onUp)
     target.removeEventListener("pointercancel", onCancel)
-    previewElement.classList.remove("dragging")
+    if (!keepOverlay) previewElement.classList.remove("dragging", "gantt-drag-overlay")
     draggingTask.value = false
-
+    queueActiveDragPreview = null
+    stopActiveDrag = null
+  }
+  const onMove = (moveEvent: PointerEvent) => {
+    const session = dragSession.value
+    if (!session) return
+    session.currentClientY = moveEvent.clientY
+    if (!isInsideTimelineDragArea(moveEvent.clientY)) return
+    session.currentClientX = clampTimelineClientX(moveEvent.clientX)
+    updateDragSessionVisual()
+    queuePreview()
+    ensureEdgeScroll()
+  }
+  const onUp = (upEvent: PointerEvent) => {
+    const session = dragSession.value
+    if (!session) return
+    session.currentClientY = upEvent.clientY
+    if (isInsideTimelineDragArea(upEvent.clientY)) {
+      session.currentClientX = clampTimelineClientX(upEvent.clientX)
+      updateDragSessionVisual()
+    }
+    const deltaDays = session.deltaDays
+    cleanup(deltaDays !== 0)
     if (deltaDays === 0) {
+      dragSession.value = null
       engineRef.value?.clearPreview()
       return
     }
-
     const patch = buildDragPatch(task, mode, originalStart, originalEnd, deltaDays)
+    updateDragSessionVisual(deltaDays)
+    session.status = "committing"
+    extendNavigationRange(patch)
     emit("taskChange", task.id, patch)
     engineRef.value?.clearPreview()
+    void finishDragOverlay(session, previewElement)
   }
-
   const onCancel = () => {
-    if (previewFrame) {
-      window.cancelAnimationFrame(previewFrame)
-      previewFrame = 0
-    }
-    if (edgeScrollFrame) {
-      window.cancelAnimationFrame(edgeScrollFrame)
-      edgeScrollFrame = 0
-    }
-    target.removeEventListener("pointermove", onMove)
-    target.removeEventListener("pointerup", onUp)
-    target.removeEventListener("pointercancel", onCancel)
-    previewElement.classList.remove("dragging")
-    draggingTask.value = false
+    cleanup()
+    dragSession.value = null
     engineRef.value?.clearPreview()
   }
 
+  stopActiveDrag = onCancel
   target.addEventListener("pointermove", onMove)
   target.addEventListener("pointerup", onUp)
   target.addEventListener("pointercancel", onCancel)
 }
 
 function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" | "end") {
-  if (shouldIgnoreBarMove(event, mode)) {
-    return
-  }
-  if (mergedConfig.value.editable === false || mergedConfig.value.editablePlan !== true) {
-    return
-  }
-  if (draggingTask.value) {
-    return
-  }
-  if (task.type === "summary") {
-    return
-  }
-  if (linkDraft.value) {
-    return
-  }
-  if (task.type === "milestone" && mode !== "move") {
+  if (
+    shouldIgnoreBarMove(event, mode)
+    || mergedConfig.value.editable === false
+    || mergedConfig.value.editablePlan !== true
+    || draggingTask.value
+    || task.type === "summary"
+    || linkDraft.value
+    || (task.type === "milestone" && mode !== "move")
+  ) {
     return
   }
   event.preventDefault()
@@ -2436,51 +2660,58 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
   const target = event.currentTarget as HTMLElement
   const previewElement = target.closest(".gantt-plan-bar") as HTMLElement | null
   const rowLayout = layoutById.value.get(task.id)
+  const timelineRect = timelineDragRect()
   if (!previewElement || !rowLayout) {
     return
   }
+  const planLayout = planPreviewLayout(task)
+  const rowTop = rowLayout.top - mergedConfig.value.headerHeight
+  const { planTop } = barVerticalMetrics()
+  const fallbackTop = (timelineRect?.top ?? 0) + mergedConfig.value.headerHeight + rowTop + planTop - scrollTop.value
   target.setPointerCapture?.(event.pointerId)
   selectedTaskId.value = task.id
   draggingTask.value = true
-  previewElement.classList.add("dragging")
+  beginDragSession(
+    event,
+    task.id,
+    "plan",
+    mode,
+    planLayout.left,
+    planLayout.width,
+    columnWidth,
+    fixedBarTop(previewElement, fallbackTop)
+  )
+  previewElement.classList.add("dragging", "gantt-drag-overlay")
   hideTaskDetails()
-  let lastDeltaDays = 0
   let previewFrame = 0
   let edgeScrollFrame = 0
   let pendingDeltaDays = 0
-  let lastClientX = clampTimelineClientX(event.clientX)
-  let lastClientY = event.clientY
-  let dragDeltaPx = 0
+  let lastPreviewDeltaDays = 0
 
-  const computeDeltaDays = () => Math.round(dragDeltaPx / columnWidth)
-
-  const queuePreview = (deltaDays: number) => {
-    if (deltaDays === lastDeltaDays) {
-      return
-    }
-    lastDeltaDays = deltaDays
-    pendingDeltaDays = deltaDays
+  const queuePreview = () => {
+    const session = dragSession.value
+    if (!session || session.taskId !== task.id || session.deltaDays === lastPreviewDeltaDays) return
+    lastPreviewDeltaDays = session.deltaDays
+    pendingDeltaDays = session.deltaDays
     if (!previewFrame) {
       previewFrame = window.requestAnimationFrame(flushPreview)
     }
   }
+  queueActiveDragPreview = queuePreview
 
   const tickEdgeScroll = () => {
     edgeScrollFrame = 0
-    const scrollDeltaPx = horizontalEdgeScroll(lastClientX, lastClientY)
-    if (scrollDeltaPx) {
-      dragDeltaPx += scrollDeltaPx
-    } else {
-      dragDeltaPx += horizontalEdgeNudge(lastClientX, lastClientY)
-    }
-    queuePreview(computeDeltaDays())
-    if (draggingTask.value && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
+    const session = dragSession.value
+    if (!session || session.status !== "dragging") return
+    panActiveDrag(horizontalEdgeStep(session.currentClientX, session.currentClientY))
+    if (isNearTimelineHorizontalEdge(session.currentClientX, session.currentClientY)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
   }
 
   const ensureEdgeScroll = () => {
-    if (!edgeScrollFrame && isNearTimelineHorizontalEdge(lastClientX, lastClientY)) {
+    const session = dragSession.value
+    if (session && !edgeScrollFrame && isNearTimelineHorizontalEdge(session.currentClientX, session.currentClientY)) {
       edgeScrollFrame = window.requestAnimationFrame(tickEdgeScroll)
     }
   }
@@ -2492,50 +2723,58 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
       buildPlanDragPatch(task, mode, originalStart, originalEnd, pendingDeltaDays),
       mode
     )
+    const effectiveDeltaDays = patchDeltaDays(patch, mode, originalStart, originalEnd, "plan")
+    if (effectiveDeltaDays !== pendingDeltaDays) updateDragSessionVisual(effectiveDeltaDays)
     const affected = computePlanDependencyPatches(task.id, patch)
+    extendNavigationRange(patch)
+    for (const affectedPatch of Object.values(affected)) {
+      extendNavigationRange(affectedPatch)
+    }
     engineRef.value?.setPreview({ taskId: task.id, patch, affected })
   }
 
   const onMove = (moveEvent: PointerEvent) => {
-    if (!isInsideTimelineDragArea(moveEvent.clientY)) {
-      return
-    }
-    const nextClientX = clampTimelineClientX(moveEvent.clientX)
-    dragDeltaPx += nextClientX - lastClientX
-    lastClientX = nextClientX
-    lastClientY = moveEvent.clientY
-    const scrollDeltaPx = horizontalEdgeScroll(moveEvent.clientX, moveEvent.clientY)
-    if (scrollDeltaPx) {
-      dragDeltaPx += scrollDeltaPx
-    }
-    queuePreview(computeDeltaDays())
+    const session = dragSession.value
+    if (!session) return
+    session.currentClientY = moveEvent.clientY
+    if (!isInsideTimelineDragArea(moveEvent.clientY)) return
+    session.currentClientX = clampTimelineClientX(moveEvent.clientX)
+    updateDragSessionVisual()
+    queuePreview()
     ensureEdgeScroll()
   }
 
-  const onUp = (upEvent: PointerEvent) => {
-    if (isInsideTimelineDragArea(upEvent.clientY)) {
-      const nextClientX = clampTimelineClientX(upEvent.clientX)
-      dragDeltaPx += nextClientX - lastClientX
-      lastClientX = nextClientX
-      lastClientY = upEvent.clientY
-    }
-    const deltaDays = computeDeltaDays()
+  const cleanup = (keepOverlay = false) => {
     if (previewFrame) {
       window.cancelAnimationFrame(previewFrame)
-      previewFrame = 0
     }
     if (edgeScrollFrame) {
       window.cancelAnimationFrame(edgeScrollFrame)
-      edgeScrollFrame = 0
     }
+    previewFrame = 0
+    edgeScrollFrame = 0
     target.releasePointerCapture?.(event.pointerId)
     target.removeEventListener("pointermove", onMove)
     target.removeEventListener("pointerup", onUp)
     target.removeEventListener("pointercancel", onCancel)
-    previewElement.classList.remove("dragging")
+    if (!keepOverlay) previewElement.classList.remove("dragging", "gantt-drag-overlay")
     draggingTask.value = false
+    queueActiveDragPreview = null
+    stopActiveDrag = null
+  }
 
+  const onUp = (upEvent: PointerEvent) => {
+    const session = dragSession.value
+    if (!session) return
+    session.currentClientY = upEvent.clientY
+    if (isInsideTimelineDragArea(upEvent.clientY)) {
+      session.currentClientX = clampTimelineClientX(upEvent.clientX)
+      updateDragSessionVisual()
+    }
+    const deltaDays = session.deltaDays
+    cleanup(deltaDays !== 0)
     if (deltaDays === 0) {
+      dragSession.value = null
       engineRef.value?.clearPreview()
       return
     }
@@ -2545,33 +2784,30 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     const affected = computePlanDependencyPatches(task.id, patch)
     notifyPlanDependencyConstraint(task, requestedPatch, patch)
     if (!hasPlanPatchChanged(task, patch) && !Object.keys(affected).length) {
+      dragSession.value = null
+      previewElement.classList.remove("dragging", "gantt-drag-overlay")
       engineRef.value?.clearPreview()
       return
     }
+    updateDragSessionVisual(patchDeltaDays(patch, mode, originalStart, originalEnd, "plan"))
+    session.status = "committing"
+    extendNavigationRange(patch)
     emit("taskChange", task.id, patch)
     for (const [taskId, affectedPatch] of Object.entries(affected)) {
+      extendNavigationRange(affectedPatch)
       emit("taskChange", taskId, affectedPatch)
     }
     engineRef.value?.clearPreview()
+    void finishDragOverlay(session, previewElement)
   }
 
   const onCancel = () => {
-    if (previewFrame) {
-      window.cancelAnimationFrame(previewFrame)
-      previewFrame = 0
-    }
-    if (edgeScrollFrame) {
-      window.cancelAnimationFrame(edgeScrollFrame)
-      edgeScrollFrame = 0
-    }
-    target.removeEventListener("pointermove", onMove)
-    target.removeEventListener("pointerup", onUp)
-    target.removeEventListener("pointercancel", onCancel)
-    previewElement.classList.remove("dragging")
-    draggingTask.value = false
+    cleanup()
+    dragSession.value = null
     engineRef.value?.clearPreview()
   }
 
+  stopActiveDrag = onCancel
   target.addEventListener("pointermove", onMove)
   target.addEventListener("pointerup", onUp)
   target.addEventListener("pointercancel", onCancel)

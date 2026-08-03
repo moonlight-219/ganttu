@@ -865,7 +865,7 @@ body.gantt-dialog-open {
   top: -5px;
   bottom: -5px;
   display: block;
-  width: 16px;
+  width: 8px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -881,11 +881,11 @@ body.gantt-dialog-open {
 }
 
 .gantt-plan-resize.start {
-  left: -7px;
+  left: -8px;
 }
 
 .gantt-plan-resize.end {
-  right: -7px;
+  right: -8px;
 }
 
 .gantt-plan-resize::after {
@@ -1026,6 +1026,12 @@ body.gantt-dialog-open {
 .gantt-plan-bar.dragging .gantt-plan-resize {
   display: none !important;
   pointer-events: none;
+}
+
+.gantt-drag-overlay {
+  cursor: grabbing !important;
+  transition: none !important;
+  will-change: left, top, width;
 }
 
 .gantt-plan-progress {
@@ -1364,7 +1370,7 @@ body.gantt-dialog-open {
   z-index: 4;
   top: 0;
   bottom: 0;
-  width: 16px;
+  width: 8px;
   border: 0;
   background: transparent;
   cursor: ew-resize;
@@ -1379,11 +1385,24 @@ body.gantt-dialog-open {
 }
 
 .gantt-resize.start {
-  left: -7px;
+  left: -8px;
 }
 
 .gantt-resize.end {
-  right: -7px;
+  right: -8px;
+}
+
+.gantt-resize::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(71, 84, 103, 0.48);
+  content: "";
+  transform: translate(-50%, -50%);
 }
 
 .gantt-editor-backdrop {

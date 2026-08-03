@@ -127,7 +127,6 @@ export interface GanttConfig {
   }
   autoSchedule?: boolean
   editable?: boolean
-  fitTimelineToViewport?: boolean
 }
 
 export interface GanttLink {
@@ -238,6 +237,5 @@ export const defaultConfig: GanttConfig = {
     progress: "#0f766e"
   },
   autoSchedule: true,
-  editable: true,
-  fitTimelineToViewport: true
+  editable: true
 }

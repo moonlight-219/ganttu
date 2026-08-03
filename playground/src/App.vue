@@ -77,7 +77,6 @@ const demoConfig = reactive<Partial<GanttConfig>>({
   showLinkRejectionNotice: true,
   virtualScroll: true,
   autoSchedule: true,
-  fitTimelineToViewport: true,
   taskColors: {
     task: "#2563eb",
     summary: "#475467",
@@ -724,7 +723,7 @@ const configRows = [
   ["firstDayOfWeek", "0 | 1", "0", "周起始日，0 表示周日，1 表示周一。"],
   ["dateFormat", "string", "YYYY-MM-DD", "日期格式配置。"],
   ["theme", "light | dark | string", "light", "主题标识，当前主要用于业务扩展。"],
-  ["visibleRange", "{ start; end }", "自动计算", "固定显示的时间范围。"],
+  ["visibleRange", "{ start; end }", "自动计算", "初始显示范围；边缘拖拽可向两端继续扩展。"],
   ["columns", "CustomColumn[]", "内置列", "完整替换左侧表格列。"],
   ["customColumns", "CustomColumn[]", "[]", "在内置列后追加自定义列。"],
   ["editorFields", "GanttEditorField[]", "内置字段", "控制任务编辑抽屉的字段。"],
@@ -740,7 +739,6 @@ const configRows = [
   ["builtInMarkerEditor", "boolean", "true", "是否使用内置里程碑弹窗。"],
   ["virtualScroll", "boolean", "true", "是否启用纵向虚拟滚动。"],
   ["autoSchedule", "boolean", "true", "拖动计划条时是否按依赖联动排程；实际条不受依赖自动排程影响。"],
-  ["fitTimelineToViewport", "boolean", "true", "数据跨度较小时是否自动补全日期列以铺满视口；关闭后 timeline 按真实数据跨度渲染，可能出现横向滚动条。"],
   ["taskColors", "object", "内置色值", "任务条、阶段条、里程碑、计划条默认颜色。"]
 ]
 
@@ -1003,13 +1001,6 @@ watch(codeLang, async () => {
                 @click="toggleActualBar"
               >
                 实际条
-              </button>
-              <button
-                type="button"
-                :class="{ active: demoConfig.fitTimelineToViewport !== false }"
-                @click="demoConfig.fitTimelineToViewport = !demoConfig.fitTimelineToViewport"
-              >
-                铺满
               </button>
               <div class="demo-column-config">
                 <button

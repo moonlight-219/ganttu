@@ -249,7 +249,7 @@ interface GanttTask {
 | `firstDayOfWeek` | `0 \| 1` | `0` | 每周第一天，`0` 为周日、`1` 为周一 |
 | `dateFormat` | `string` | `YYYY-MM-DD` | 日期格式标识；当前内置输入仍使用 `YYYY-MM-DD` |
 | `theme` | `light \| dark \| string` | — | 主题名称预留项；当前主题通过 CSS 覆盖 |
-| `visibleRange` | `{ start, end }` | 自动计算 | 固定时间轴范围 |
+| `visibleRange` | `{ start, end }` | 自动计算 | 初始时间轴范围；边缘拖拽可向两端扩展，重新传入配置时重置 |
 | `columns` | `CustomColumn[]` | 内置列 | 完整替换左侧列 |
 | `customColumns` | `CustomColumn[]` | `[]` | 在默认列后追加自定义列 |
 | `editorFields` | `GanttEditorField[]` | 内置字段 | 控制编辑器字段显示、编辑状态和输入类型 |
