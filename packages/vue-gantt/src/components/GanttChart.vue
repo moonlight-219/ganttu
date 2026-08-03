@@ -346,6 +346,17 @@ const taskChildrenByParent = computed(() => {
   }
   return children
 })
+const rolledUpSummaryEditorKeys = new Set([
+  "planStart",
+  "planEnd",
+  "actualStart",
+  "actualEnd",
+  "progress"
+])
+const editingRolledUpSummary = computed(() => (
+  editDraft.value.type === "summary"
+  && (taskChildrenByParent.value.get(editDraft.value.id)?.length ?? 0) > 0
+))
 const previewTaskOverrides = computed(() => buildPreviewTaskOverrides(
   dragPreview.value,
   baseTaskById.value,
@@ -1051,7 +1062,11 @@ const resolvedEditorFields = computed<GanttEditorField[]>(() => {
       ...field,
       visible: field.visible ?? editorFieldVisible(field.key)
     }))
-  return [...defaultFields, ...customTableFields, ...additionalFields].filter((field) => field.visible !== false)
+  return [...defaultFields, ...customTableFields, ...additionalFields]
+    .filter((field) => field.visible !== false)
+    .map((field) => editingRolledUpSummary.value && rolledUpSummaryEditorKeys.has(field.key)
+      ? { ...field, editable: false }
+      : field)
 })
 const customEditorColumns = computed<CustomColumn[]>(() => resolvedEditorFields.value.filter((field) =>
   !builtinEditorKeys.has(field.key)
@@ -1067,6 +1082,9 @@ const editableCustomColumns = computed(() => customEditorColumns.value.filter((c
 ))
 
 function editorFieldEditable(key: string): boolean {
+  if (editingRolledUpSummary.value && rolledUpSummaryEditorKeys.has(key)) {
+    return false
+  }
   return mergedConfig.value.editorFields?.find((field) => field.key === key)?.editable !== false
 }
 
@@ -3634,8 +3652,6 @@ defineExpose({
               @dblclick.stop="openEditor(taskById.get(layout.taskId)!)"
             >
               <span class="gantt-plan-progress" :style="{ width: `${taskById.get(layout.taskId)?.actual.progress ?? 0}%` }"></span>
-              <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-cap start"></span>
-              <span v-if="taskById.get(layout.taskId)?.type === 'summary'" class="gantt-summary-cap end"></span>
               <button
                 v-if="mergedConfig.enableLinkCreation !== false && taskById.get(layout.taskId)?.type === 'task'"
                 class="gantt-link-handle in"
@@ -3792,6 +3808,9 @@ defineExpose({
           @update:model-value="setParentId"
         />
       </label>
+      <p v-if="editingRolledUpSummary" class="gantt-editor-rollup-note" role="note">
+        阶段日期与进度根据子任务自动汇总，无需手动填写。
+      </p>
       <div class="gantt-editor-grid">
         <label v-if="editorFieldVisible('planStart')">
           计划开始

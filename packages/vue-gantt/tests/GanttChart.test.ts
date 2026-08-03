@@ -908,6 +908,8 @@ describe("GanttChart", () => {
 
     expect(wrapper.emitted("taskChange")).toBeUndefined()
     expect(wrapper.find(".gantt-plan-bar.summary .gantt-plan-resize").exists()).toBe(false)
+    expect(wrapper.find(".gantt-plan-bar.summary .gantt-summary-cap").exists()).toBe(false)
+    expect(wrapper.findAll(".gantt-bar.summary .gantt-summary-cap")).toHaveLength(2)
   })
 
   it("extends the actual bar when dragging the start handle left", async () => {
@@ -1415,7 +1417,7 @@ describe("GanttChart", () => {
     vi.useRealTimers()
   })
 
-  it("rolls summary dates and progress up from child tasks", () => {
+  it("rolls summary dates and progress up from child tasks", async () => {
     const wrapper = mount(GanttChart, {
       props: {
         tasks: [
@@ -1455,6 +1457,37 @@ describe("GanttChart", () => {
       "07-13"
     ])
     expect(summaryRow.find(".gantt-progress-cell b").text()).toBe("38%")
+    expect(wrapper.find(".gantt-plan-bar.summary .gantt-plan-progress").attributes("style")).toContain("width: 38%")
+
+    await summaryRow.trigger("dblclick")
+    expect(wrapper.find(".gantt-editor-rollup-note").text()).toContain("根据子任务自动汇总")
+    expect(wrapper.findAll(".gantt-editor .gantt-date-picker")).toHaveLength(4)
+    expect(wrapper.findAll(".gantt-editor .gantt-date-picker").every((picker) => (
+      picker.classes().includes("disabled")
+    ))).toBe(true)
+    expect(wrapper.find('.gantt-editor input[type="range"]').attributes("disabled")).toBeDefined()
+  })
+
+  it("keeps dates and progress editable for an empty summary", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{
+          id: "empty-phase",
+          name: "Empty phase",
+          type: "summary",
+          plan: { start: "2026-07-01", end: "2026-07-05" },
+          actual: { start: "2026-07-01", end: "2026-07-05", progress: 20 }
+        }],
+        config: { viewMode: "day" }
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+    expect(wrapper.find(".gantt-editor-rollup-note").exists()).toBe(false)
+    expect(wrapper.findAll(".gantt-editor .gantt-date-picker").every((picker) => (
+      !picker.classes().includes("disabled")
+    ))).toBe(true)
+    expect(wrapper.find('.gantt-editor input[type="range"]').attributes("disabled")).toBeUndefined()
   })
 
   it("marks unfinished tasks as overdue when actual end exceeds plan end", () => {

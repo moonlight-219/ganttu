@@ -885,7 +885,10 @@ body.gantt-dialog-open {
 }
 
 .gantt-chart .gantt-plan-bar.summary .gantt-plan-progress {
-  display: none;
+  z-index: 1;
+  display: block;
+  background: color-mix(in srgb, var(--progress-color), transparent 18%);
+  clip-path: inset(0 round 999px);
 }
 
 .gantt-plan-resize {
@@ -1008,14 +1011,6 @@ body.gantt-dialog-open {
 
 .gantt-summary-cap.end {
   right: 0;
-}
-
-.gantt-plan-bar.summary .gantt-summary-cap {
-  bottom: -2px;
-  width: 6px;
-  height: 12px;
-  border: 1px solid color-mix(in srgb, var(--bar-color), white 15%);
-  background: color-mix(in srgb, var(--bar-color), white 30%);
 }
 
 .gantt-bar.milestone {
@@ -1464,6 +1459,16 @@ body.gantt-dialog-open {
     0 24px 64px rgba(15, 23, 42, 0.3),
     0 2px 8px rgba(15, 23, 42, 0.08);
   transform: translate(-50%, -50%);
+}
+
+.gantt-editor-rollup-note {
+  margin: -4px 0 0;
+  padding: 9px 11px;
+  border-left: 3px solid #3b82f6;
+  background: #eff6ff;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .gantt-task-drawer {

@@ -1662,6 +1662,10 @@ watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
           </div>
         </div>
+        <p class="doc-hint">
+          <code>summary</code> 阶段拥有子任务时，计划日期、实际日期和进度会自动汇总并只读；
+          没有子任务的空阶段仍可手动设置这些字段。
+        </p>
         <h2>DateRange 字段说明</h2>
         <div class="doc-table four-cols">
           <div class="table-head"><span>字段</span><span>类型</span><span>必填</span><span>说明</span></div>

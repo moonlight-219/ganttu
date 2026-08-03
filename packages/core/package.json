@@ -5,6 +5,16 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "homepage": "https://github.com/moonlight-219/ganttu#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moonlight-219/ganttu.git",
+    "directory": "packages/core"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

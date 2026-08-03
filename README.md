@@ -386,7 +386,7 @@ interface GanttTask {
 注意事项：
 
 - 推荐使用 `YYYY-MM-DD` 日期字符串，避免时区造成日期偏移。
-- `summary` 表示阶段，子任务通过 `parentId` 归属阶段；阶段日期和进度会根据子任务实时汇总。
+- `summary` 表示阶段，子任务通过 `parentId` 归属阶段；有子任务时，阶段计划日期、实际日期和进度会实时汇总并在编辑器中只读，空阶段仍可手动编辑。
 - `color` 只控制实际条颜色，`planColor` 只控制计划条颜色，两者互不跟随。
 - 未设置 `planColor` 时使用 `config.taskColors.plan`。
 - `resources` 是负责人数组，内置编辑器中使用逗号分隔录入多人。
