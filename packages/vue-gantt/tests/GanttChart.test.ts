@@ -96,6 +96,67 @@ describe("GanttChart", () => {
     expect(typeof (wrapper.vm as unknown as { exportImage?: unknown }).exportImage).toBe("function")
   })
 
+  it("exports milestone labels with the same width rules as the page", async () => {
+    const fillText = vi.fn()
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockImplementation(function (this: HTMLCanvasElement) {
+        return {
+          canvas: this,
+          beginPath: vi.fn(),
+          arc: vi.fn(),
+          clearRect: vi.fn(),
+          clip: vi.fn(),
+          closePath: vi.fn(),
+          fill: vi.fn(),
+          fillRect: vi.fn(),
+          fillText,
+          lineTo: vi.fn(),
+          measureText: vi.fn((text: string) => ({ width: text.length * 12 } as TextMetrics)),
+          moveTo: vi.fn(),
+          quadraticCurveTo: vi.fn(),
+          rect: vi.fn(),
+          restore: vi.fn(),
+          save: vi.fn(),
+          scale: vi.fn(),
+          setTransform: vi.fn(),
+          stroke: vi.fn(),
+          strokeRect: vi.fn()
+        } as unknown as CanvasRenderingContext2D
+      })
+    const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValue("data:image/png;base64,export")
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks,
+        markers: [
+          { id: "export-m1", name: "项目验收", date: "2026-07-01", color: "#dc2626" },
+          { id: "export-m2", name: "正式上线", date: "2026-07-01", color: "#2563eb" }
+        ],
+        config: {
+          viewMode: "day",
+          columnWidth: 30,
+          visibleRange: { start: "2026-06-28", end: "2026-07-31" }
+        }
+      }
+    })
+    vi.spyOn(wrapper.find(".gantt-chart").element, "getBoundingClientRect").mockReturnValue({
+      left: 0, right: 900, top: 0, bottom: 500, width: 900, height: 500,
+      x: 0, y: 0, toJSON: () => ({})
+    } as DOMRect)
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    Object.defineProperty(timeline, "clientWidth", { configurable: true, value: 560 })
+    Object.defineProperty(timeline, "clientHeight", { configurable: true, value: 500 })
+
+    await (wrapper.vm as unknown as { exportImage: (options: { download: boolean; pixelRatio: number }) => Promise<string> })
+      .exportImage({ download: false, pixelRatio: 1 })
+
+    expect(fillText.mock.calls.some(([text]) => text === "项目验收")).toBe(true)
+    expect(fillText.mock.calls.some(([text]) => text === "正式上线")).toBe(true)
+    wrapper.unmount()
+    getContext.mockRestore()
+    toDataURL.mockRestore()
+  })
+
   it("draws dependency links relative to the timeline body, not the header", () => {
     const calls: Array<[string, ...number[]]> = []
     const context = {
@@ -1854,6 +1915,91 @@ describe("GanttChart", () => {
 
     expect(wrapper.findAll(".gantt-row").length).toBeLessThan(manyTasks.length)
     expect(wrapper.find(".gantt-row-spacer").exists()).toBe(true)
+  })
+
+  it("keeps the 5000-task layout stable during horizontal scroll and drag previews", async () => {
+    const manyTasks: GanttTask[] = Array.from({ length: 5000 }, (_, index) => ({
+      id: `perf-task-${index}`,
+      name: `Performance task ${index}`,
+      type: "task",
+      plan: { start: "2026-07-01", end: "2026-07-03" },
+      actual: { start: "2026-07-01", end: "2026-07-03", progress: index % 100 }
+    }))
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: manyTasks,
+        height: 360,
+        config: {
+          viewMode: "day",
+          rowHeight: 30,
+          headerHeight: 50,
+          visibleRange: { start: "2026-06-28", end: "2026-08-31" }
+        }
+      }
+    })
+    await nextTick()
+    const setupState = (wrapper.vm as unknown as { $: { setupState: Record<string, unknown> } }).$.setupState
+    const initialLayouts = setupState.layouts
+    const initialDisplayedTasks = setupState.displayedTasks
+    expect(wrapper.findAll(".gantt-row").length).toBeLessThan(80)
+
+    const timeline = wrapper.find(".gantt-timeline").element as HTMLElement
+    timeline.scrollLeft = 480
+    await wrapper.find(".gantt-timeline").trigger("scroll")
+    await nextTick()
+    expect(setupState.layouts).toBe(initialLayouts)
+
+    timeline.scrollLeft = 0
+    await wrapper.find(".gantt-timeline").trigger("scroll")
+    await nextTick()
+    const rafCallbacks: FrameRequestCallback[] = []
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallbacks.push(callback)
+        return rafCallbacks.length
+      })
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined)
+    Object.defineProperty(timeline, "clientWidth", { configurable: true, value: 600 })
+    vi.spyOn(timeline, "getBoundingClientRect").mockReturnValue({
+      left: 300, right: 900, top: 40, bottom: 360, width: 600, height: 320,
+      x: 300, y: 40, toJSON: () => ({})
+    } as DOMRect)
+    const taskBar = wrapper.find(".gantt-bar.task")
+    await taskBar.trigger("pointerdown", { clientX: 400, clientY: 120, pointerId: 1 })
+    await taskBar.trigger("pointermove", { clientX: 430, clientY: 120, pointerId: 1 })
+    rafCallbacks.shift()?.(16)
+    await nextTick()
+
+    expect(setupState.displayedTasks).toBe(initialDisplayedTasks)
+    expect(setupState.layouts).toBe(initialLayouts)
+    expect((setupState.previewTaskOverrides as Map<string, GanttTask>).size).toBe(1)
+    const pointerUp = taskBar.trigger("pointerup", { clientX: 430, clientY: 120, pointerId: 1 })
+    const emitted = wrapper.emitted("taskChange")?.at(-1) as [string, PatchTask] | undefined
+    const committedTasks = manyTasks.map((task) => task.id === emitted?.[0]
+      ? {
+          ...task,
+          actual: {
+            ...task.actual,
+            start: emitted[1].actualStart ?? task.actual.start,
+            end: emitted[1].actualEnd ?? task.actual.end
+          }
+        }
+      : task)
+    await wrapper.setProps({ tasks: committedTasks })
+    await pointerUp
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find(".gantt-bar.task").classes()).toContain("gantt-drag-overlay")
+
+    const commitFrame = rafCallbacks.splice(0)
+    commitFrame.forEach((callback) => callback(32))
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find(".gantt-bar.task").classes()).not.toContain("gantt-drag-overlay")
+    wrapper.unmount()
+    requestAnimationFrame.mockRestore()
+    cancelAnimationFrame.mockRestore()
   })
 
   it("renders year with week, month, and quarter scale units", async () => {

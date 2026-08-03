@@ -201,6 +201,7 @@ const dragPreview = ref<{
   patch: PatchTask
   affected?: Record<string, PatchTask>
 } | null>(null)
+const externalPreviewDates = ref<Date[]>([])
 const linkDraft = ref<{
   sourceId: string
   sourceAnchor: LinkAnchor
@@ -228,6 +229,27 @@ const mergedConfig = computed<GanttConfig>(() => {
 // 命令式引擎实例（onMounted 后赋值）。阶段 2 仅作命令式入口 + 影子状态，
 // 不接管渲染链路；阶段 3 再让组件渲染读引擎，届时响应式竞态可根治。
 const engineRef = shallowRef<GanttEngine | null>(null)
+const taskSource = shallowRef<GanttTask[]>(props.tasks)
+const DEFERRED_TASK_SYNC_THRESHOLD = 1000
+let deferredTaskSyncFrame = 0
+let deferredTasks: GanttTask[] | null = null
+let finishDeferredTaskSync: (() => void) | null = null
+function queueDeferredTaskSync() {
+  if (deferredTaskSyncFrame) return
+  deferredTaskSyncFrame = window.requestAnimationFrame(() => {
+    deferredTaskSyncFrame = 0
+    const nextTasks = deferredTasks
+    deferredTasks = null
+    if (nextTasks) {
+      taskSource.value = nextTasks
+      engineRef.value?.setTasks(nextTasks)
+    }
+    void nextTick(() => {
+      finishDeferredTaskSync?.()
+      finishDeferredTaskSync = null
+    })
+  })
+}
 watch(mergedConfig, (config) => {
   if (!resizingTaskList.value) {
     taskListWidth.value = config.taskListWidth
@@ -235,7 +257,15 @@ watch(mergedConfig, (config) => {
   engineRef.value?.mergeConfig(config)
 }, { immediate: true })
 watch(() => props.tasks, (tasks) => {
-  engineRef.value?.setTasks(tasks)
+  const shouldDefer = tasks.length >= DEFERRED_TASK_SYNC_THRESHOLD
+    && dragSession.value?.status === "committing"
+  if (!shouldDefer) {
+    taskSource.value = tasks
+    engineRef.value?.setTasks(tasks)
+    return
+  }
+  deferredTasks = tasks
+  queueDeferredTaskSync()
 })
 watch(() => props.links, (links) => {
   engineRef.value?.setLinks(links)
@@ -301,10 +331,25 @@ const tableGridTemplate = computed(() => tableColumnWidths.value
   .join(" "))
 const tableContentWidth = computed(() => tableColumnWidths.value
   .reduce((width, item) => width + item.width, 0))
-const baseDisplayedTasks = computed(() => rollupSummaryTasks(props.tasks))
-const displayedTasks = computed(() => rollupSummaryTasks(
-  props.tasks.map((task) => applyPreviewPatchToTask(task))
+const baseDisplayedTasks = computed(() => rollupSummaryTasks(taskSource.value))
+const baseTaskById = computed(() => new Map(baseDisplayedTasks.value.map((task) => [task.id, task])))
+const taskParentById = computed(() => new Map(taskSource.value.map((task) => [task.id, task.parentId ?? null])))
+const taskChildrenByParent = computed(() => {
+  const children = new Map<string, string[]>()
+  for (const task of taskSource.value) {
+    if (!task.parentId) continue
+    children.set(task.parentId, [...(children.get(task.parentId) ?? []), task.id])
+  }
+  return children
+})
+const previewTaskOverrides = computed(() => buildPreviewTaskOverrides(
+  dragPreview.value,
+  baseTaskById.value,
+  taskParentById.value,
+  taskChildrenByParent.value
 ))
+// 全量任务结构在拖拽期间保持稳定；预览仅通过 previewTaskOverrides 覆盖受影响节点。
+const displayedTasks = baseDisplayedTasks
 const dependencyTasks = computed(() => {
   const milestoneIds = new Set(displayedTasks.value.filter((task) => task.type === "milestone").map((task) => task.id))
   return displayedTasks.value.map((task) => ({
@@ -315,7 +360,7 @@ const dependencyTasks = computed(() => {
       : (task.dependencies ?? []).filter((dependency) => !milestoneIds.has(dependency.predecessorId))
   }))
 })
-const taskById = computed(() => new Map(displayedTasks.value.map((task) => [task.id, task])))
+const taskById = baseTaskById
 const selectedTask = computed(() => selectedTaskId.value ? taskById.value.get(selectedTaskId.value) ?? null : null)
 const normalizedLinks = computed(() => {
   const milestoneIds = new Set(displayedTasks.value.filter((task) => task.type === "milestone").map((task) => task.id))
@@ -348,22 +393,7 @@ const dateRange = computed(() => {
   if (navigationRange.value) {
     dates.push(navigationRange.value.start, navigationRange.value.end)
   }
-  // 拖拽中范围只扩不缩：在原始范围上叠加预览日期，避免拖动途中时间轴两端被提前裁剪
-  const preview = dragPreview.value
-  if (preview) {
-    for (const id of [preview.taskId, ...Object.keys(preview.affected ?? {})]) {
-      const task = taskById.value.get(id)
-      if (task) {
-        const displayTask = applyPreviewPatchToTask(task)
-        dates.push(
-          toDate(displayTask.plan.start),
-          toDate(displayTask.plan.end),
-          toDate(displayTask.actual.start),
-          toDate(displayTask.actual.end)
-        )
-      }
-    }
-  }
+  dates.push(...externalPreviewDates.value)
   if (!dates.length) {
     const today = toDate(new Date())
     return padDateRangeToViewport({ start: today, end: addDays(today, 30) })
@@ -477,7 +507,8 @@ const layoutResult = computed(() => computeLayout(
     ? undefined
     : {
         scrollTop: scrollTop.value,
-        scrollLeft: scrollLeft.value,
+        // computeLayout 只按纵向窗口裁剪。横向滚动不能让 5000 条任务重新布局。
+        scrollLeft: 0,
         clientWidth: timelineRef.value?.clientWidth ?? 0,
         clientHeight: viewportHeight.value,
         dpr: window.devicePixelRatio || 1
@@ -501,7 +532,7 @@ const renderedLayouts = computed<TaskLayout[]>(() => [
 ])
 const layoutById = computed(() => new Map(renderedLayouts.value.map((layout) => [layout.taskId, layout])))
 const visibleRows = computed(() => flatTasks.value.slice(visibleWindow.value.start, visibleWindow.value.end + 1))
-const shouldShowEmptyTimeline = computed(() => !props.tasks.length && mergedConfig.value.showTimelineWhenEmpty === true)
+const shouldShowEmptyTimeline = computed(() => !taskSource.value.length && mergedConfig.value.showTimelineWhenEmpty === true)
 
 function barVerticalMetrics() {
   const outerGap = Math.max(
@@ -520,11 +551,27 @@ function barVerticalMetrics() {
 }
 
 const selectedLink = computed(() => selectedLinkId.value ? normalizedLinks.value.find((link) => link.id === selectedLinkId.value) ?? null : null)
+const linksByTaskId = computed(() => {
+  const byTaskId = new Map<string, GanttLink[]>()
+  for (const link of normalizedLinks.value) {
+    byTaskId.set(link.sourceId, [...(byTaskId.get(link.sourceId) ?? []), link])
+    byTaskId.set(link.targetId, [...(byTaskId.get(link.targetId) ?? []), link])
+  }
+  return byTaskId
+})
 const linkOverlayItems = computed(() => {
   if (mergedConfig.value.showPlanBar === false) {
     return []
   }
-  return normalizedLinks.value.flatMap((link) => {
+  const visibleLinks = new Map<string, GanttLink>()
+  for (const taskId of layoutById.value.keys()) {
+    for (const link of linksByTaskId.value.get(taskId) ?? []) {
+      if (layoutById.value.has(link.sourceId) && layoutById.value.has(link.targetId)) {
+        visibleLinks.set(link.id, link)
+      }
+    }
+  }
+  return [...visibleLinks.values()].flatMap((link) => {
     const sourceLayout = layoutById.value.get(link.sourceId)
     const targetLayout = layoutById.value.get(link.targetId)
     const sourceTask = taskById.value.get(link.sourceId)
@@ -682,7 +729,7 @@ function taskDurationText(task: GanttTask): string {
 }
 
 watch([scale, layouts, scrollLeft, scrollTop, taskListWidth], () => {
-  nextTick(drawCanvas)
+  queueCanvasDraw()
 })
 
 // 拖拽预览把时间轴向左扩展时，timelineStart 前移会使所有内容坐标整体右移，
@@ -722,7 +769,7 @@ watch([totalWidth, () => viewportSize.value.width], () => {
   nextTick(() => {
     applyPendingDragPan()
     clampTimelineScrollLeft()
-    drawCanvas()
+    queueCanvasDraw()
   })
 }, { flush: "post" })
 
@@ -733,7 +780,7 @@ function finishDragRender() {
   if (timeline) {
     scrollLeft.value = timeline.scrollLeft
   }
-  nextTick(drawCanvas)
+  queueCanvasDraw()
 }
 watch(dragPreview, (next) => {
   if (!next) {
@@ -743,7 +790,7 @@ watch(dragPreview, (next) => {
 
 onMounted(() => {
   engineRef.value = createGanttEngine({
-    tasks: props.tasks,
+    tasks: taskSource.value,
     links: props.links,
     markers: props.markers,
     config: mergedConfig.value,
@@ -757,13 +804,18 @@ onMounted(() => {
   // dateRange/scale computed 仍依赖该 ref，响应式链路不变
   engineRef.value.on("previewchange", (preview) => {
     dragPreview.value = preview as typeof dragPreview.value
+    if (dragSession.value) {
+      if (externalPreviewDates.value.length) externalPreviewDates.value = []
+    } else {
+      externalPreviewDates.value = previewPatchDates(preview as typeof dragPreview.value)
+    }
   })
   drawCanvas()
   updateViewportSize()
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
       updateViewportSize()
-      nextTick(drawCanvas)
+      queueCanvasDraw()
     })
     if (chartRef.value) {
       resizeObserver.observe(chartRef.value)
@@ -792,6 +844,9 @@ onBeforeUnmount(() => {
   }
   if (linkDraftFrame) {
     window.cancelAnimationFrame(linkDraftFrame)
+  }
+  if (deferredTaskSyncFrame) {
+    window.cancelAnimationFrame(deferredTaskSyncFrame)
   }
 })
 
@@ -1281,7 +1336,7 @@ function deleteSelectedTask() {
 }
 
 function rollupSummaryTasks(tasks: GanttTask[]): GanttTask[] {
-  const byId = new Map(tasks.map((task) => [task.id, {
+  const byId = new Map<string, GanttTask>(tasks.map((task) => [task.id, {
     ...task,
     plan: { ...task.plan },
     actual: { ...task.actual },
@@ -1301,31 +1356,9 @@ function rollupSummaryTasks(tasks: GanttTask[]): GanttTask[] {
     if (task.type !== "summary" || childTasks.length === 0) {
       return task
     }
-
-    const planStarts = childTasks.map((child) => toDate(child.plan.start))
-    const planEnds = childTasks.map((child) => toDate(child.plan.end))
-    const actualStarts = childTasks.map((child) => toDate(child.actual.start))
-    const actualEnds = childTasks.map((child) => toDate(child.actual.end))
-    const weighted = childTasks.reduce((acc, child) => {
-      const weight = taskDurationDays(child.actual.start, child.actual.end)
-      return {
-        total: acc.total + weight,
-        done: acc.done + weight * clampProgress(child.actual.progress)
-      }
-    }, { total: 0, done: 0 })
-
-    task.plan = {
-      ...task.plan,
-      start: formatDate(minTaskDate(planStarts)),
-      end: formatDate(maxTaskDate(planEnds))
-    }
-    task.actual = {
-      ...task.actual,
-      start: formatDate(minTaskDate(actualStarts)),
-      end: formatDate(maxTaskDate(actualEnds)),
-      progress: weighted.total > 0 ? Math.round(weighted.done / weighted.total) : 0
-    }
-    return task
+    const rolledUp = rollupSummaryTask(task, childTasks)
+    byId.set(task.id, rolledUp)
+    return rolledUp
   }
 
   for (const task of byId.values()) {
@@ -1335,6 +1368,103 @@ function rollupSummaryTasks(tasks: GanttTask[]): GanttTask[] {
   }
 
   return tasks.map((task) => byId.get(task.id) ?? task)
+}
+
+function rollupSummaryTask(task: GanttTask, childTasks: GanttTask[]): GanttTask {
+  if (task.type !== "summary" || childTasks.length === 0) {
+    return task
+  }
+  const weighted = childTasks.reduce((acc, child) => {
+    const weight = taskDurationDays(child.actual.start, child.actual.end)
+    return {
+      total: acc.total + weight,
+      done: acc.done + weight * clampProgress(child.actual.progress)
+    }
+  }, { total: 0, done: 0 })
+  return {
+    ...task,
+    plan: {
+      ...task.plan,
+      start: formatDate(minTaskDate(childTasks.map((child) => toDate(child.plan.start)))),
+      end: formatDate(maxTaskDate(childTasks.map((child) => toDate(child.plan.end))))
+    },
+    actual: {
+      ...task.actual,
+      start: formatDate(minTaskDate(childTasks.map((child) => toDate(child.actual.start)))),
+      end: formatDate(maxTaskDate(childTasks.map((child) => toDate(child.actual.end)))),
+      progress: weighted.total > 0 ? Math.round(weighted.done / weighted.total) : 0
+    }
+  }
+}
+
+function applyTaskPatch(task: GanttTask, patch: PatchTask): GanttTask {
+  return {
+    ...task,
+    plan: {
+      ...task.plan,
+      start: patch.planStart ?? task.plan.start,
+      end: patch.planEnd ?? task.plan.end
+    },
+    actual: {
+      ...task.actual,
+      start: patch.actualStart ?? task.actual.start,
+      end: patch.actualEnd ?? task.actual.end,
+      progress: patch.progress ?? task.actual.progress
+    }
+  }
+}
+
+function previewPatchDates(preview: typeof dragPreview.value): Date[] {
+  if (!preview) return []
+  return [preview.patch, ...Object.values(preview.affected ?? {})]
+    .flatMap((patch) => [patch.planStart, patch.planEnd, patch.actualStart, patch.actualEnd])
+    .filter((date): date is string | Date => Boolean(date))
+    .map(toDate)
+}
+
+function buildPreviewTaskOverrides(
+  preview: typeof dragPreview.value,
+  byId: Map<string, GanttTask>,
+  parentById: Map<string, string | null>,
+  childrenByParent: Map<string, string[]>
+): Map<string, GanttTask> {
+  const overrides = new Map<string, GanttTask>()
+  if (!preview) return overrides
+
+  const patches = new Map<string, PatchTask>([
+    [preview.taskId, preview.patch],
+    ...Object.entries(preview.affected ?? {})
+  ])
+  const ancestorIds = new Set<string>()
+  for (const [taskId, patch] of patches) {
+    const task = byId.get(taskId)
+    if (task) overrides.set(taskId, applyTaskPatch(task, patch))
+    let parentId = parentById.get(taskId) ?? null
+    while (parentId) {
+      ancestorIds.add(parentId)
+      parentId = parentById.get(parentId) ?? null
+    }
+  }
+
+  const depth = (taskId: string) => {
+    let value = 0
+    let parentId = parentById.get(taskId) ?? null
+    while (parentId) {
+      value += 1
+      parentId = parentById.get(parentId) ?? null
+    }
+    return value
+  }
+  const deepestFirst = [...ancestorIds].sort((left, right) => depth(right) - depth(left))
+  for (const summaryId of deepestFirst) {
+    const summary = byId.get(summaryId)
+    if (!summary) continue
+    const children = (childrenByParent.get(summaryId) ?? [])
+      .map((childId) => overrides.get(childId) ?? byId.get(childId))
+      .filter((task): task is GanttTask => Boolean(task))
+    overrides.set(summaryId, rollupSummaryTask(summary, children))
+  }
+  return overrides
 }
 
 function minTaskDate(dates: Date[]): Date {
@@ -1622,6 +1752,16 @@ function drawCanvas() {
   }
 
   drawGrid(context, scale.value, mergedConfig.value.rowHeight, width, height, scrollLeft.value, scrollTop.value)
+}
+
+let canvasDrawQueued = false
+function queueCanvasDraw() {
+  if (canvasDrawQueued) return
+  canvasDrawQueued = true
+  void nextTick(() => {
+    canvasDrawQueued = false
+    drawCanvas()
+  })
 }
 
 async function exportImage(options: GanttExportImageOptions = {}): Promise<string> {
@@ -1933,14 +2073,25 @@ function drawExportMarkers(context: CanvasRenderingContext2D, x: number, top: nu
     context.moveTo(markerX, top)
     context.lineTo(markerX, top + height)
     context.stroke()
-    const label = group.markers[0]?.name ?? ""
-    if (label) {
-      const labelWidth = Math.min(120, Math.max(56, label.length * 14))
-      drawRoundRect(context, markerX - 4, top + 8, labelWidth, 24, 4, group.color || "#d97706")
-      drawCanvasText(context, label, markerX + 4, top + 24, 700, "#ffffff", labelWidth - 12, "left")
+    for (const [markerIndex, marker] of group.markers.entries()) {
+      if (!marker.name) continue
+      const markerColor = marker.color || "#d97706"
+      const labelWidth = exportMarkerLabelWidth(context, marker.name)
+      const labelX = markerX - 8
+      const labelY = top + 8 + markerIndex * 30
+      drawRoundRect(context, labelX, labelY, labelWidth, 24, 3, markerColor)
+      drawCanvasText(context, marker.name, labelX + 9, labelY + 16, 700, "#ffffff", labelWidth - 18, "left")
     }
   }
   context.lineWidth = 1
+}
+
+function exportMarkerLabelWidth(context: CanvasRenderingContext2D, label: string): number {
+  context.save()
+  context.font = `700 12px "Microsoft YaHei", "Segoe UI", Arial, sans-serif`
+  const textWidth = context.measureText(label).width
+  context.restore()
+  return Math.min(180, Math.max(72, Math.ceil(textWidth) + 18))
 }
 
 function drawExportBars(context: CanvasRenderingContext2D, x: number, top: number, width: number, height: number, headerHeight: number) {
@@ -2055,8 +2206,12 @@ function drawCanvasText(
   context.textBaseline = "alphabetic"
   const originX = align === "center" ? x + maxWidth / 2 : align === "right" ? x + maxWidth : x
   let output = text
-  while (output.length > 1 && context.measureText(output).width > maxWidth) {
-    output = `${output.slice(0, -2)}…`
+  if (context.measureText(output).width > maxWidth) {
+    let visibleText = text
+    while (visibleText.length > 0 && context.measureText(`${visibleText}…`).width > maxWidth) {
+      visibleText = visibleText.slice(0, -1)
+    }
+    output = `${visibleText}…`
   }
   context.fillText(output, originX, y)
   context.restore()
@@ -2274,9 +2429,9 @@ function dragViewportStyle(session: DragSession) {
 }
 
 function taskStyle(layout: TaskLayout, task: GanttTask) {
-  const hasPreview = dragPreview.value?.taskId === task.id
   const activeVisual = activeDragFor(task.id, "actual")
   const displayTask = previewTask(task)
+  const hasPreview = displayTask !== task
   const actualStart = toDate(displayTask.actual.start)
   const actualEnd = toDate(displayTask.actual.end)
   const left = hasPreview
@@ -2372,27 +2527,7 @@ function previewTask(task: GanttTask): GanttTask {
 }
 
 function applyPreviewPatchToTask(task: GanttTask): GanttTask {
-  const preview = dragPreview.value
-  const patch = preview?.taskId === task.id
-    ? preview.patch
-    : preview?.affected?.[task.id]
-  if (!patch) {
-    return task
-  }
-  return {
-    ...task,
-    plan: {
-      ...task.plan,
-      start: patch.planStart ?? task.plan.start,
-      end: patch.planEnd ?? task.plan.end
-    },
-    actual: {
-      ...task.actual,
-      start: patch.actualStart ?? task.actual.start,
-      end: patch.actualEnd ?? task.actual.end,
-      progress: patch.progress ?? task.actual.progress
-    }
-  }
+  return previewTaskOverrides.value.get(task.id) ?? task
 }
 
 function markerGroupStyle(date: string, color?: string) {
@@ -2469,10 +2604,10 @@ function extendNavigationRange(patch: PatchTask) {
     return
   }
   const current = navigationRange.value ?? dateRange.value
-  navigationRange.value = {
-    start: new Date(Math.min(current.start.getTime(), ...dates.map((date) => date.getTime()))),
-    end: new Date(Math.max(current.end.getTime(), ...dates.map((date) => date.getTime())))
-  }
+  const nextStartTime = Math.min(current.start.getTime(), ...dates.map((date) => date.getTime()))
+  const nextEndTime = Math.max(current.end.getTime(), ...dates.map((date) => date.getTime()))
+  if (nextStartTime === current.start.getTime() && nextEndTime === current.end.getTime()) return
+  navigationRange.value = { start: new Date(nextStartTime), end: new Date(nextEndTime) }
 }
 
 function fixedBarTop(element: HTMLElement, fallback: number) {
@@ -2484,10 +2619,17 @@ async function finishDragOverlay(session: DragSession, element: HTMLElement) {
   await nextTick()
   applyPendingDragPan()
   await nextTick()
-  if (dragSession.value === session) {
-    dragSession.value = null
+  const finish = () => {
+    if (dragSession.value === session) {
+      dragSession.value = null
+    }
+    element.classList.remove("dragging", "gantt-drag-overlay")
   }
-  element.classList.remove("dragging", "gantt-drag-overlay")
+  if (deferredTaskSyncFrame) {
+    finishDeferredTaskSync = finish
+    return
+  }
+  finish()
 }
 
 function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" | "end") {
@@ -2622,6 +2764,7 @@ function beginDrag(event: PointerEvent, task: GanttTask, mode: "move" | "start" 
     const patch = buildDragPatch(task, mode, originalStart, originalEnd, deltaDays)
     updateDragSessionVisual(deltaDays)
     session.status = "committing"
+    if (taskSource.value.length >= DEFERRED_TASK_SYNC_THRESHOLD) queueDeferredTaskSync()
     extendNavigationRange(patch)
     emit("taskChange", task.id, patch)
     engineRef.value?.clearPreview()
@@ -2791,6 +2934,7 @@ function beginPlanDrag(event: PointerEvent, task: GanttTask, mode: "move" | "sta
     }
     updateDragSessionVisual(patchDeltaDays(patch, mode, originalStart, originalEnd, "plan"))
     session.status = "committing"
+    if (taskSource.value.length >= DEFERRED_TASK_SYNC_THRESHOLD) queueDeferredTaskSync()
     extendNavigationRange(patch)
     emit("taskChange", task.id, patch)
     for (const [taskId, affectedPatch] of Object.entries(affected)) {
@@ -3409,7 +3553,9 @@ defineExpose({
                 taskById.get(layout.taskId)?.type,
                 {
                   editable: mergedConfig.editable !== false && mergedConfig.editablePlan === true && taskById.get(layout.taskId)?.type !== 'summary',
-                  locked: mergedConfig.editable === false || mergedConfig.editablePlan !== true || taskById.get(layout.taskId)?.type === 'summary'
+                  locked: mergedConfig.editable === false || mergedConfig.editablePlan !== true || taskById.get(layout.taskId)?.type === 'summary',
+                  dragging: Boolean(activeDragFor(layout.taskId, 'plan')),
+                  'gantt-drag-overlay': Boolean(activeDragFor(layout.taskId, 'plan'))
                 }
               ]"
               :style="planBarStyle(layout, taskById.get(layout.taskId)!)"
@@ -3452,7 +3598,9 @@ defineExpose({
                 {
                   overdue: isOverdue(previewTask(taskById.get(layout.taskId)!)),
                   editable: mergedConfig.editable !== false && mergedConfig.editableActual !== false && taskById.get(layout.taskId)?.type !== 'summary',
-                  locked: mergedConfig.editable === false || mergedConfig.editableActual === false || taskById.get(layout.taskId)?.type === 'summary'
+                  locked: mergedConfig.editable === false || mergedConfig.editableActual === false || taskById.get(layout.taskId)?.type === 'summary',
+                  dragging: Boolean(activeDragFor(layout.taskId, 'actual')),
+                  'gantt-drag-overlay': Boolean(activeDragFor(layout.taskId, 'actual'))
                 }
               ]"
               :style="taskStyle(layout, taskById.get(layout.taskId)!)"
