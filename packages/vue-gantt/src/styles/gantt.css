@@ -211,12 +211,41 @@
   background: #ffffff;
 }
 
+.gantt-table-scroll,
+.gantt-timeline {
+  scrollbar-color: #c4cbd6 transparent;
+  scrollbar-width: thin;
+}
+
+.gantt-table-scroll::-webkit-scrollbar,
+.gantt-timeline::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.gantt-table-scroll::-webkit-scrollbar-track,
+.gantt-timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.gantt-table-scroll::-webkit-scrollbar-thumb,
+.gantt-timeline::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: #c4cbd6;
+  background-clip: padding-box;
+}
+
+.gantt-table-scroll::-webkit-scrollbar-thumb:hover,
+.gantt-timeline::-webkit-scrollbar-thumb:hover {
+  background: #98a2b3;
+  background-clip: padding-box;
+}
+
 .gantt-table-scroll {
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: #c4cbd6 transparent;
-  scrollbar-width: thin;
 }
 
 .gantt-table-head {
