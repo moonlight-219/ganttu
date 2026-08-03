@@ -1770,6 +1770,7 @@ describe("GanttChart", () => {
 
     expect(defaultColors.find(".gantt-bar.task").attributes("style")).toContain("--bar-color: #ef4444")
     expect(defaultColors.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #cbd5e1")
+    expect(defaultColors.find(".gantt-plan-bar.task").attributes("style")).toContain("--progress-color: #0f766e")
     expect(defaultColors.find(".gantt-plan-bar.task").attributes("style")).toContain("--plan-color-fade: 10%")
 
     const taskPlanColor = mount(GanttChart, {
@@ -1780,7 +1781,8 @@ describe("GanttChart", () => {
     })
 
     expect(taskPlanColor.find(".gantt-bar.task").attributes("style")).toContain("--bar-color: #ef4444")
-    expect(taskPlanColor.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #10b981")
+    expect(taskPlanColor.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #cbd5e1")
+    expect(taskPlanColor.find(".gantt-plan-bar.task").attributes("style")).toContain("--progress-color: #10b981")
 
     const configured = mount(GanttChart, {
       props: {
@@ -1793,6 +1795,7 @@ describe("GanttChart", () => {
     })
 
     expect(configured.find(".gantt-plan-bar.task").attributes("style")).toContain("--bar-color: #94a3b8")
+    expect(configured.find(".gantt-plan-bar.task").attributes("style")).toContain("--progress-color: #0f766e")
     expect(configured.find(".gantt-plan-bar.task").attributes("style")).toContain("--plan-color-fade: 10%")
   })
 
@@ -2305,6 +2308,7 @@ describe("GanttChart", () => {
     expect(editorText).not.toContain("排程方式")
     expect(editorText).not.toContain("实际条颜色")
     expect(editorText).not.toContain("计划条颜色")
+    expect(editorText).not.toContain("计划条内部颜色")
   })
 
   it("edits calendarId through understandable work-calendar options", async () => {
@@ -2341,7 +2345,8 @@ describe("GanttChart", () => {
         config: {
           viewMode: "day",
           editorFields: [
-            { key: "planColor", label: "计划条颜色", visible: true, editable: true }
+            { key: "color", label: "实际条颜色", visible: true, editable: true },
+            { key: "planColor", label: "计划条内部颜色", visible: true, editable: true }
           ]
         }
       }
@@ -2349,6 +2354,10 @@ describe("GanttChart", () => {
 
     await wrapper.find(".gantt-row").trigger("dblclick")
     const drawer = wrapper.find(".gantt-task-drawer")
+    expect(drawer.findAll(".gantt-editor-field > span").map((item) => item.text())).toEqual([
+      "计划条内部颜色",
+      "实际条颜色"
+    ])
     expect(drawer.find("input[type='date']").exists()).toBe(false)
     expect(drawer.find("select").exists()).toBe(false)
 
@@ -2361,7 +2370,7 @@ describe("GanttChart", () => {
       .find((option) => option.text().includes("阶段"))
     await summaryOption!.trigger("click")
 
-    await drawer.find(".gantt-color-swatch[aria-label='选择计划条颜色 #10b981']").trigger("click")
+    await drawer.find(".gantt-color-swatch[aria-label='选择计划条内部颜色 #10b981']").trigger("click")
     await drawer.find("button.primary").trigger("click")
 
     expect(wrapper.emitted("taskChange")?.[0]).toMatchObject([

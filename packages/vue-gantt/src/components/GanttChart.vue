@@ -149,7 +149,7 @@ const editDraft = ref<GanttTaskEditorDraft>({
   actualEnd: "",
   progress: 0,
   color: "#2563eb",
-  planColor: "#cbd5e1",
+  planColor: "#0f766e",
   resources: "",
   calendarId: "",
   duration: 0,
@@ -1001,8 +1001,8 @@ const defaultTaskEditorFields: GanttEditorField[] = [
       { label: "手动", value: "manual" }
     ]
   },
-  { key: "color", label: "实际条颜色", visible: false, editable: true },
-  { key: "planColor", label: "计划条颜色", visible: false, editable: true }
+  { key: "planColor", label: "计划条内部颜色", visible: false, editable: true },
+  { key: "color", label: "实际条颜色", visible: false, editable: true }
 ]
 
 const editorFieldColumnKeys: Record<string, string> = {
@@ -1199,7 +1199,7 @@ function openEditor(task: GanttTask) {
     actualEnd: formatDate(task.actual.end),
     progress: task.actual.progress,
     color: task.color || defaultTaskColor(task.type),
-    planColor: task.planColor || defaultPlanColor(),
+    planColor: task.planColor || progressColor(),
     resources: task.resources?.join(", ") ?? "",
     calendarId: task.calendarId ?? "standard",
     duration: task.duration ?? taskDurationDays(task.actual.start, task.actual.end),
@@ -1225,7 +1225,7 @@ function openCreateEditor(type: GanttTask["type"]) {
     actualEnd: type === "milestone" ? start : formatDate(addDays(start, 4)),
     progress: 0,
     color: defaultTaskColor(type),
-    planColor: defaultPlanColor(),
+    planColor: progressColor(),
     resources: "",
     calendarId: "standard",
     duration: type === "milestone" ? 1 : 5,
@@ -2176,11 +2176,14 @@ function drawExportBars(context: CanvasRenderingContext2D, x: number, top: numbe
       const plan = planPreviewLayout(displayTask)
       const planX = x + plan.left - scrollLeft.value
       const planY = rowY + planTop
+      const planProgress = Math.max(0, Math.min(100, displayTask.actual.progress)) / 100
+      const planProgressColor = displayTask.planColor || progressColor()
       if (displayTask.type === "summary") {
-        drawSummaryExportBar(context, planX, planY + 2, plan.width, 8, displayTask.planColor || defaultPlanColor(), true)
+        drawSummaryExportBar(context, planX, planY + 2, plan.width, 8, defaultPlanColor(), true)
+        drawRoundRect(context, planX, planY + 2, plan.width * planProgress, 6, 999, planProgressColor)
       } else {
-        drawRoundRect(context, planX, planY, plan.width, PLAN_BAR_HEIGHT, 999, displayTask.planColor || defaultPlanColor())
-        drawRoundRect(context, planX, planY, plan.width * Math.max(0, Math.min(100, displayTask.actual.progress)) / 100, PLAN_BAR_HEIGHT, 999, "rgba(20, 116, 112, 0.72)")
+        drawRoundRect(context, planX, planY, plan.width, PLAN_BAR_HEIGHT, 999, defaultPlanColor())
+        drawRoundRect(context, planX, planY, plan.width * planProgress, PLAN_BAR_HEIGHT, 999, planProgressColor)
       }
     }
     if (mergedConfig.value.showActualBar !== false) {
@@ -2227,10 +2230,10 @@ function drawSummaryExportBar(
   if (width <= 0) return
   if (isPlan) {
     drawRoundRect(context, x, y, width, Math.max(4, height - 2), 999, color)
-  } else {
-    drawRoundRect(context, x, y + height / 2 - 2, width, 4, 999, color)
+    return
   }
-  const capWidth = isPlan ? 6 : 8
+  drawRoundRect(context, x, y + height / 2 - 2, width, 4, 999, color)
+  const capWidth = 8
   drawRoundRect(context, x, y, capWidth, height, 3, color)
   drawRoundRect(context, x + width - capWidth, y, capWidth, height, 3, color)
 }
@@ -2544,7 +2547,8 @@ function planBarStyle(layout: TaskLayout, task: GanttTask) {
     : Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1) * dayWidth
   const rowTop = layout.top - mergedConfig.value.headerHeight
   const { planTop } = barVerticalMetrics()
-  const planColor = displayTask.planColor || defaultPlanColor()
+  const planColor = defaultPlanColor()
+  const planProgressColor = displayTask.planColor || progressColor()
 
   return {
     ...(activeVisual ? dragViewportStyle(activeVisual) : {}),
@@ -2554,7 +2558,7 @@ function planBarStyle(layout: TaskLayout, task: GanttTask) {
     "--bar-color": planColor,
     "--plan-color-fade": "10%",
     "--plan-border-fade": "0%",
-    "--progress-color": progressColor()
+    "--progress-color": planProgressColor
   }
 }
 
@@ -3921,6 +3925,37 @@ defineExpose({
         >
         </slot>
       </label>
+      <div v-if="editorFieldVisible('planColor')" class="gantt-editor-field">
+        <span>计划条内部颜色</span>
+        <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('planColor') }">
+          <button
+            v-for="color in editorColorOptions"
+            :key="color"
+            type="button"
+            class="gantt-color-swatch"
+            :class="{ selected: editDraft.planColor.toLowerCase() === color }"
+            :style="{ '--swatch-color': color }"
+            :aria-label="`选择计划条内部颜色 ${color}`"
+            :aria-pressed="editDraft.planColor.toLowerCase() === color"
+            :disabled="!editorFieldEditable('planColor')"
+            @click="editDraft.planColor = color"
+          >
+            <span>&#10003;</span>
+          </button>
+          <label
+            class="gantt-color-custom"
+            :class="{ selected: Boolean(editDraft.planColor) && !editorColorOptions.includes(editDraft.planColor.toLowerCase()) }"
+            aria-label="自定义计划条内部颜色"
+          >
+            <input
+              type="color"
+              :value="editDraft.planColor || progressColor()"
+              :disabled="!editorFieldEditable('planColor')"
+              @input="editDraft.planColor = ($event.target as HTMLInputElement).value"
+            >
+          </label>
+        </div>
+      </div>
       <div v-if="editorFieldVisible('color')" class="gantt-editor-field">
         <span>实际条颜色</span>
         <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('color') }">
@@ -3941,40 +3976,9 @@ defineExpose({
           <label
             class="gantt-color-custom"
             :class="{ selected: !editorColorOptions.includes(editDraft.color.toLowerCase()) }"
-            aria-label="自定义颜色"
+            aria-label="自定义实际条颜色"
           >
             <input v-model="editDraft.color" type="color" :disabled="!editorFieldEditable('color')">
-          </label>
-        </div>
-      </div>
-      <div v-if="editorFieldVisible('planColor')" class="gantt-editor-field">
-        <span>计划条颜色</span>
-        <div class="gantt-color-palette" :class="{ disabled: !editorFieldEditable('planColor') }">
-          <button
-            v-for="color in editorColorOptions"
-            :key="color"
-            type="button"
-            class="gantt-color-swatch"
-            :class="{ selected: editDraft.planColor.toLowerCase() === color }"
-            :style="{ '--swatch-color': color }"
-            :aria-label="`选择计划条颜色 ${color}`"
-            :aria-pressed="editDraft.planColor.toLowerCase() === color"
-            :disabled="!editorFieldEditable('planColor')"
-            @click="editDraft.planColor = color"
-          >
-            <span>&#10003;</span>
-          </button>
-          <label
-            class="gantt-color-custom"
-            :class="{ selected: Boolean(editDraft.planColor) && !editorColorOptions.includes(editDraft.planColor.toLowerCase()) }"
-            aria-label="自定义计划条颜色"
-          >
-            <input
-              type="color"
-              :value="editDraft.planColor || defaultPlanColor()"
-              :disabled="!editorFieldEditable('planColor')"
-              @input="editDraft.planColor = ($event.target as HTMLInputElement).value"
-            >
           </label>
         </div>
       </div>

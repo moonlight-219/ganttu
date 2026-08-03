@@ -115,4 +115,6 @@ ganttRef.value?.getEngine()?.zoomToFit()
 
 阶段拥有子任务时，计划日期、实际日期和进度会根据子任务自动汇总，并在内置编辑器中只读；空阶段仍可手动设置这些字段。
 
+`config.taskColors.plan` 控制计划条外部底色，任务的 `planColor` 控制计划条内部进度颜色；任务的 `color` 控制实际条颜色。
+
 完整配置、自定义列、编辑器、插槽和 API 示例请查看[项目文档](https://github.com/moonlight-219/ganttu#readme)。

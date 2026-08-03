@@ -108,8 +108,8 @@ const demoConfig = reactive<Partial<GanttConfig>>({
     { key: "progress", label: "进度", type: "number", editable: true },
     { key: "resources", label: "负责人", editable: true },
     { key: "schedulingMode", label: "依赖排程", visible: true, type: "select", editable: true },
+    { key: "planColor", label: "计划条内部颜色", visible: true, editable: true },
     { key: "color", label: "实际条颜色", visible: true, editable: true },
-    { key: "planColor", label: "计划条颜色", visible: true, editable: true },
     {
       key: "priority",
       label: "优先级",
@@ -555,8 +555,8 @@ const configCodeTS = `const ganttConfig: Partial<GanttConfig> = {
     { key: "resources", label: "负责人", editable: true },
     // playground 用于展示全部能力；业务项目只需开启实际会用到的高级字段。
     { key: "schedulingMode", label: "依赖排程", visible: true, type: "select", editable: true },
+    { key: "planColor", label: "计划条内部颜色", visible: true, editable: true },
     { key: "color", label: "实际条颜色", visible: true, editable: true },
-    { key: "planColor", label: "计划条颜色", visible: true, editable: true },
   ]
 }`
 // JS 版本仅去掉类型标注
@@ -571,7 +571,7 @@ const dataCodeTS = `const tasks = ref<GanttTask[]>([
     plan: { start: "2026-07-01", end: "2026-07-16" },   // 必填：计划时间
     actual: { start: "2026-07-01", end: "2026-07-18", progress: 48 }, // 必填：实际时间和进度
     color: "#64748b",                                   // 可选：实际条颜色
-    planColor: "#cbd5e1",                               // 可选：计划条颜色
+    planColor: "#0f766e",                               // 可选：计划条内部进度颜色
     custom: { priority: "high", owner: "项目组" }        // 可选：业务自定义字段
   },
   {
@@ -1081,7 +1081,7 @@ const taskRows = [
   ["parentId", "string | null", "否", "父级阶段 ID。"],
   ["dependencies", "Dependency[]", "否", "任务自身依赖声明，通常也可通过 links 统一传入。"],
   ["color", "string", "否", "实际条颜色。"],
-  ["planColor", "string", "否", "计划条颜色。"],
+  ["planColor", "string", "否", "计划条内部进度颜色；外部底色由 taskColors.plan 统一控制。"],
   ["calendarId", "standard | delivery", "否", "工作日历：standard 为周一至周五，delivery 包含周末。"],
   ["resources", "string[]", "否", "负责人列表。"],
   ["segments", "Array<{ start; end }>", "否", "预留的分段任务字段，当前视图暂未拆段渲染。"],
@@ -1166,7 +1166,7 @@ const patchRows = [
   ["actualStart / actualEnd", "string | Date", "实际条拖拽、拉伸或编辑保存时返回。"],
   ["progress", "number", "进度变更时返回。"],
   ["name / type / parentId", "string", "任务基础信息编辑保存时返回。"],
-  ["color / planColor", "string", "实际条或计划条颜色编辑保存时返回。"],
+  ["color / planColor", "string", "实际条颜色或计划条内部进度颜色编辑保存时返回。"],
   ["duration / schedulingMode", "number / auto | manual", "工期或排程方式编辑保存时返回。"],
   ["resources", "string[]", "负责人编辑保存时返回。"],
   ["calendarId", "standard | delivery", "工作日历选择保存时返回内部标识。"],
@@ -1895,7 +1895,7 @@ watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
           <li>同一个前置任务和后置任务之间只能保留一条依赖线。</li>
           <li>计划条被依赖约束限制时会触发 <code>link-rejected</code>，其中 <code>reason</code> 为 <code>constraint</code>。</li>
           <li>里程碑当前按日期固定展示在时间轴上，不随表格滚动，也不支持上下自由拖拽；如需特殊位置样式，建议通过里程碑编辑器或自定义样式扩展。</li>
-          <li>计划条颜色由 <code>planColor</code> 控制，实际条颜色由 <code>color</code> 控制，两者互不跟随。</li>
+          <li>计划条外部底色由 <code>taskColors.plan</code> 统一控制，内部进度颜色由 <code>planColor</code> 控制；实际条颜色由 <code>color</code> 控制。</li>
           <li>工期、日历 ID、排程方式和任务条颜色属于高级编辑字段，默认隐藏；需要时通过 <code>editorFields.visible</code> 开启。</li>
           <li>左侧自定义列只有设置 <code>editable: true</code> 才自动进入编辑器，并应同时设置 <code>type</code> 和必要的 <code>options</code>。</li>
           <li>如果不需要内置弹窗，可关闭 <code>builtInTaskEditor</code> 或使用对应插槽完全替换。</li>

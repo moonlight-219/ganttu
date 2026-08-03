@@ -387,8 +387,8 @@ interface GanttTask {
 
 - 推荐使用 `YYYY-MM-DD` 日期字符串，避免时区造成日期偏移。
 - `summary` 表示阶段，子任务通过 `parentId` 归属阶段；有子任务时，阶段计划日期、实际日期和进度会实时汇总并在编辑器中只读，空阶段仍可手动编辑。
-- `color` 只控制实际条颜色，`planColor` 只控制计划条颜色，两者互不跟随。
-- 未设置 `planColor` 时使用 `config.taskColors.plan`。
+- `color` 控制实际条颜色，`planColor` 控制计划条内部进度颜色，两者互不跟随。
+- 计划条外部底色统一使用 `config.taskColors.plan`；未设置 `planColor` 时，内部进度颜色使用 `config.taskColors.progress`。
 - `resources` 是负责人数组，内置编辑器中使用逗号分隔录入多人。
 - 用户自定义字段放在 `custom` 中。
 - `constraint` 会参与 Core 的影响冲突检查；`segments` 已包含在数据类型中，但当前 Vue 组件尚未绘制分段任务条。
