@@ -230,8 +230,8 @@ gantt.destroy()
 | `links` | `GanttLink[]` | `[]` | 初始依赖数据 |
 | `markers` | `GanttMarker[]` | `[]` | 初始时间轴里程碑 |
 | `config` | `Partial<GanttConfig>` | `{}` | 甘特图配置 |
-| `width` | `string \| number` | `100%` | 实例宽度 |
-| `height` | `string \| number` | `620px` | 实例高度 |
+| `width` | `string \| number` | `100%` | 实例宽度；数字按像素处理，字符串支持 CSS 尺寸单位 |
+| `height` | `string \| number` | `620px` | 实例高度；数字按像素处理，字符串支持 CSS 尺寸单位 |
 | `onTaskChange/Create/Delete` | `function` | - | 任务变更回调 |
 | `onTaskEditRequest` | `function` | - | 外部任务编辑请求 |
 | `onMarkerCreate/Change/Delete` | `function` | - | 里程碑变更回调 |
@@ -319,9 +319,35 @@ React 开发模式启用 Strict Mode 时 effect 可能执行两次，清理函�
 | `markers` | `GanttMarker[]` | `[]` | 固定在时间轴顶部的里程碑标识和竖线 |
 | `config` | `Partial<GanttConfig>` | `{}` | 甘特图配置 |
 | `width` | `string \| number` | `config.width` 或 `100%` | 组件宽度；数字按像素处理 |
-| `height` | `string \| number` | `config.height` 或 `620px` | 组件高度；数字按像素处理 |
+| `height` | `string \| number` | `config.height` 或 `620px` | 组件高度；数字按像素处理，字符串支持 CSS 尺寸单位 |
 
 也可以使用 `onTaskChange`、`onLinkChange` 等同名回调属性，效果与 Vue 事件监听一致。
+
+### 宽高尺寸
+
+`width` 和 `height` 可以传数字或 CSS 尺寸字符串。数字会自动转换为 `px`；字符串会原样应用，因此支持 `px`、`%`、`vh`、`vw` 等单位。组件属性的优先级高于 `config.width` / `config.height`，原生实例也遵循相同规则。
+
+```vue
+<GanttChart :height="620" />
+<GanttChart height="620px" />
+<GanttChart height="70vh" />
+<GanttChart height="100%" />
+```
+
+使用百分比高度时，父级容器必须具有可计算的明确高度，否则浏览器无法确定 `100%` 对应的实际像素值：
+
+```vue
+<div style="height: 720px">
+  <GanttChart height="100%" />
+</div>
+```
+
+原生实例可以在创建时或运行中设置尺寸：
+
+```ts
+const gantt = createGantt(container, { width: "100%", height: 620 })
+gantt.setSize("100%", "70vh")
+```
 
 ## 任务数据
 
@@ -377,7 +403,7 @@ interface GanttTask {
 | `columnWidths` | `Partial<Record<ViewMode, number>>` | — | 为不同刻度分别设置单元宽度 |
 | `headerHeight` | `number` | `50` | 时间轴表头高度 |
 | `taskListWidth` | `number` | `280` | 左侧表格初始宽度 |
-| `width` / `height` | `string \| number` | — | 甘特图整体尺寸 |
+| `width` / `height` | `string \| number` | — | 甘特图整体尺寸；数字按 `px`，字符串支持 `px`、`%`、`vh`、`vw` 等 CSS 单位 |
 | `locale` | `string` | `zh-CN` | 区域标识，当前作为预留配置 |
 | `firstDayOfWeek` | `0 \| 1` | `0` | 每周第一天，`0` 为周日、`1` 为周一 |
 | `dateFormat` | `string` | `YYYY-MM-DD` | 日期格式标识；当前内置输入仍使用 `YYYY-MM-DD` |

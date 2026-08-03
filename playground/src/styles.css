@@ -606,7 +606,7 @@ li code {
 .gantt-demo-hero {
   margin-left: 238px;
   padding: 80px 34px 0;
-  background: linear-gradient(135deg, #f0f4ff 0%, #f8fafc 100%);
+  background: #f5f7fb;
   border-bottom: 1px solid var(--doc-border);
 }
 
@@ -694,6 +694,70 @@ li code {
 .example-code-block pre {
   max-height: 680px;
   padding-top: 44px;
+}
+
+.examples-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 18fr) minmax(360px, 7fr);
+  align-items: start;
+  gap: 22px;
+  min-height: 100vh;
+  padding: 80px 24px 40px;
+  background: linear-gradient(135deg, #f0f4ff 0%, #f8fafc 100%);
+}
+
+.examples-workspace .gantt-demo-hero.standalone {
+  min-width: 0;
+  margin: 0;
+  padding: 0 !important;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.examples-workspace .example-code-center {
+  position: sticky;
+  top: 72px;
+  display: flex;
+  min-width: 0;
+  max-width: none;
+  max-height: calc(100vh - 96px);
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+}
+
+.examples-workspace .example-code-heading {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.examples-workspace .example-code-heading h1 {
+  font-size: 21px;
+}
+
+.examples-workspace .example-code-controls {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.examples-workspace .example-code-tabs {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.examples-workspace .example-copy-note {
+  margin-top: 12px;
+  line-height: 1.55;
+}
+
+.examples-workspace .example-code-block {
+  min-height: 0;
+  margin-top: 12px;
+}
+
+.examples-workspace .example-code-block pre {
+  max-height: calc(100vh - 330px);
 }
 
 .gantt-demo-hero:fullscreen {
@@ -1140,7 +1204,22 @@ li code {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1180px) {
+  .examples-workspace {
+    display: block;
+    padding: 72px 22px 48px;
+  }
+
+  .examples-workspace .example-code-center {
+    position: static;
+    max-height: none;
+    margin-top: 32px;
+  }
+
+  .examples-workspace .example-code-block pre {
+    max-height: 680px;
+  }
+
   .gantt-demo-hero {
     margin-left: 0;
     padding: 72px 22px 0;
@@ -1163,6 +1242,10 @@ li code {
 }
 
 @media (max-width: 720px) {
+  .examples-workspace {
+    padding: 64px 16px 40px;
+  }
+
   .gantt-demo-hero {
     padding: 64px 16px 0;
   }

@@ -508,7 +508,7 @@ const configCodeTS = `const ganttConfig: Partial<GanttConfig> = {
   // 甘特图基础设置
   viewMode: "day",                 // 时间刻度: day / week / month / quarter / year
   width: "100%",                   // 甘特图整体宽度
-  height: "620px",                 // 甘特图整体高度
+  height: "620px",                 // 高度支持数字像素或 px / % / vh 等 CSS 尺寸
   rowHeight: 48,                   // 左侧表格和右侧时间轴行高
   columnWidth: 34,                 // 右侧时间格宽度
   headerHeight: 52,                // 表头高度
@@ -1031,8 +1031,8 @@ const propRows = [
   ["links", "GanttLink[]", "否", "任务依赖数据，仅计划条参与依赖。"],
   ["markers", "GanttMarker[]", "否", "时间轴上的里程碑标识。"],
   ["config", "Partial<GanttConfig>", "否", "甘特图配置对象。"],
-  ["width", "string | number", "否", "组件宽度，优先级高于 config.width。"],
-  ["height", "string | number", "否", "组件高度，优先级高于 config.height。"],
+  ["width", "string | number", "否", "组件宽度，数字按 px，字符串支持 CSS 尺寸；优先级高于 config.width。"],
+  ["height", "string | number", "否", "组件高度，数字按 px，字符串支持 px、%、vh 等；百分比要求父容器有明确高度。"],
   ["onTaskChange", "(id, patch) => void", "否", "task-change 的同名回调属性。"],
   ["onTaskCreate / onTaskDelete", "function", "否", "task-create / task-delete 的同名回调属性。"],
   ["onTaskEditRequest", "(request) => void", "否", "task-edit-request 的同名回调属性。"],
@@ -1048,7 +1048,7 @@ const configRows = [
   ["columnWidths", "Partial<Record<ViewMode, number>>", "-", "按视图单独设置格子宽度。"],
   ["headerHeight", "number", "50", "表头高度。"],
   ["taskListWidth", "number", "280", "左侧表格宽度。"],
-  ["width / height", "string | number", "100% / 620px", "甘特图整体宽高。"],
+  ["width / height", "string | number", "100% / 620px", "数字按 px；字符串支持 px、%、vh、vw 等 CSS 尺寸，百分比高度依赖父容器高度。"],
   ["locale", "string", "zh-CN", "预留的本地化标识，当前不会改变界面文案。"],
   ["firstDayOfWeek", "0 | 1", "0", "周起始日，0 表示周日，1 表示周一。"],
   ["dateFormat", "string", "YYYY-MM-DD", "预留的日期格式，当前日期输入输出仍使用组件既有格式。"],
@@ -1220,8 +1220,8 @@ const nativeOptionRows = [
   ["links", "GanttLink[]", "[]", "初始依赖关系。"],
   ["markers", "GanttMarker[]", "[]", "初始时间轴里程碑。"],
   ["config", "Partial<GanttConfig>", "{}", "甘特图配置。"],
-  ["width", "string | number", "100%", "实例宽度，数字按像素处理。"],
-  ["height", "string | number", "620px", "实例高度，数字按像素处理。"],
+  ["width", "string | number", "100%", "实例宽度；数字按 px，字符串支持 CSS 尺寸单位。"],
+  ["height", "string | number", "620px", "实例高度；支持数字、px、%、vh 等，百分比要求父容器有明确高度。"],
   ["onTaskChange / Create / Delete", "function", "-", "任务变更、创建和删除回调。"],
   ["onTaskEditRequest", "function", "-", "关闭内置任务编辑器后的编辑请求。"],
   ["onMarkerCreate / Change / Delete", "function", "-", "时间轴里程碑增删改回调。"],
@@ -1356,8 +1356,9 @@ watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
     </header>
 
     <template v-if="activePlaygroundPage === 'examples'">
-    <section class="gantt-demo-hero standalone" data-gantt-fullscreen-root>
-      <div class="gantt-demo-toolbar">
+    <main class="examples-workspace">
+    <section class="gantt-demo-hero standalone" data-gantt-fullscreen-root style="padding-bottom:20px;">
+      <div class="gantt-demo-toolbar" style="margin-bottom:20px;">
         <div class="toolbar-row toolbar-row-primary">
           <div class="toolbar-info">
             <strong class="toolbar-title">项目甘特图</strong>
@@ -1483,7 +1484,7 @@ watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
        :links="demoLinks"
        :markers="demoMarkers"
        :config="demoConfig"
-       height="540px"
+       height="650px"
         @task-change="handleTaskChange"
         @task-create="handleTaskCreate"
         @task-delete="handleTaskDelete"
@@ -1542,6 +1543,7 @@ watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
         <pre><code :class="codeClass">{{ selectedExampleCode }}</code></pre>
       </div>
     </section>
+    </main>
     </template>
 
     <template v-else>
@@ -1758,6 +1760,11 @@ watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
           </div>
         </div>
+        <p class="doc-hint">
+          <code>width</code> / <code>height</code> 传数字时按像素处理，例如 <code>:height="620"</code>；
+          传字符串时可使用 <code>620px</code>、<code>70vh</code> 或 <code>100%</code>。
+          百分比高度要求父级容器具有明确高度，否则浏览器无法计算实际高度。
+        </p>
       </section>
 
       <section id="events" class="doc-section">
