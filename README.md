@@ -7,17 +7,18 @@
 | 包 | 用途 |
 | --- | --- |
 | `ct-gantt-core` | 数据类型、日期工具、依赖标准化、循环检测、排程、布局和影响计算，不包含任何界面 |
-| `ct-gantt-vue` | 完整 Vue 甘特图组件，包含左侧表格、右侧时间轴以及内置任务、依赖和里程碑编辑界面 |
+| `ct-gantt-vue` | 完整 Vue 甘特图组件和 `createGantt()` 原生实例入口，包含左侧表格、右侧时间轴以及内置编辑界面 |
 
 如果只想自行实现弹窗，可以继续使用 `ct-gantt-vue`，关闭内置编辑器并监听编辑请求；如果连甘特图界面也不需要，只使用排程算法，则单独安装 `ct-gantt-core`。
 
 ## 安装
 
 ```bash
-pnpm add vue ct-gantt-core ct-gantt-vue
+pnpm add ct-gantt-vue
 ```
 
 Vue 版本要求：`^3.5.0`。
+非 Vue 项目使用 `createGantt()` 时，因为当前原生入口复用 Vue 渲染器，需要同时安装运行时：`pnpm add vue ct-gantt-vue`。
 
 在应用入口或使用甘特图的组件中引入样式：
 
@@ -177,6 +178,138 @@ function handleLinkRejected(rejection: GanttLinkRejection) {
 
 > `GanttChart` 是受控组件。拖曳、拉伸、编辑、创建和删除操作会抛出事件，但不会直接改写父组件传入的数据；业务端必须根据事件更新 `tasks`、`links` 或 `markers`。
 
+## 原生实例 API
+
+不使用 Vue 组件时，可以在任意已挂载的 DOM 容器中创建甘特图：
+
+| 接入方式 | 适用场景 | 数据与生命周期 |
+| --- | --- | --- |
+| `GanttChart` 组件 | Vue 项目（推荐） | 自动处理挂载和销毁；父组件通过 props 和事件维护受控数据 |
+| `createGantt()` | 原生 HTML、Vue、React 等浏览器项目 | 手动处理生命周期；实例自动维护交互数据，外部数据通过 setter 同步 |
+
+```ts
+import {
+  createGantt,
+  type GanttTask
+} from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
+
+const tasks: GanttTask[] = [
+  {
+    id: "task-1",
+    name: "需求确认",
+    type: "task",
+    plan: { start: "2026-08-03", end: "2026-08-07" },
+    actual: { start: "2026-08-03", end: "2026-08-07", progress: 30 }
+  }
+]
+
+const gantt = createGantt("#gantt", {
+  tasks,
+  height: 620,
+  onTaskChange(id, patch) {
+    console.log(id, patch)
+  }
+})
+
+gantt.setTask("task-1", { progress: 60 })
+gantt.scrollToDate("2026-08-05")
+gantt.zoomToFit()
+
+// 页面或框架组件卸载时调用。
+gantt.destroy()
+```
+
+`createGantt()` 接受 CSS 选择器或 `HTMLElement`。实例会自动维护界面操作产生的任务、依赖和里程碑变更；业务端从接口重新获取数据后，可以调用 `setTasks()`、`setLinks()` 或 `setMarkers()` 同步。
+
+### CreateGanttOptions
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `tasks` | `GanttTask[]` | `[]` | 初始任务数据 |
+| `links` | `GanttLink[]` | `[]` | 初始依赖数据 |
+| `markers` | `GanttMarker[]` | `[]` | 初始时间轴里程碑 |
+| `config` | `Partial<GanttConfig>` | `{}` | 甘特图配置 |
+| `width` | `string \| number` | `100%` | 实例宽度 |
+| `height` | `string \| number` | `620px` | 实例高度 |
+| `onTaskChange/Create/Delete` | `function` | - | 任务变更回调 |
+| `onTaskEditRequest` | `function` | - | 外部任务编辑请求 |
+| `onMarkerCreate/Change/Delete` | `function` | - | 里程碑变更回调 |
+| `onMarkerEditRequest` | `function` | - | 外部里程碑编辑请求 |
+| `onLinkChange/onLinkRejected` | `function` | - | 依赖变更和拒绝回调 |
+
+### 在 Vue 中使用原生实例
+
+```vue
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { createGantt, type GanttInstance, type GanttTask } from "ct-gantt-vue"
+
+const containerRef = ref<HTMLElement | null>(null)
+const tasks = ref<GanttTask[]>([])
+let gantt: GanttInstance | null = null
+
+onMounted(() => {
+  gantt = createGantt(containerRef.value!, { tasks: tasks.value, height: 620 })
+})
+
+watch(tasks, (value) => gantt?.setTasks(value), { deep: true })
+onBeforeUnmount(() => gantt?.destroy())
+</script>
+
+<template>
+  <div ref="containerRef" style="width: 100%; height: 620px"></div>
+</template>
+```
+
+### 在 React 中使用原生实例
+
+```tsx
+import { useEffect, useRef } from "react"
+import { createGantt, type GanttInstance, type GanttTask } from "ct-gantt-vue"
+
+export function NativeGantt({ tasks }: { tasks: GanttTask[] }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const ganttRef = useRef<GanttInstance | null>(null)
+
+  useEffect(() => {
+    ganttRef.current = createGantt(containerRef.current!, { tasks, height: 620 })
+    return () => {
+      ganttRef.current?.destroy()
+      ganttRef.current = null
+    }
+  }, [])
+
+  useEffect(() => ganttRef.current?.setTasks(tasks), [tasks])
+  return <div ref={containerRef} style={{ width: "100%", height: 620 }} />
+}
+```
+
+React 开发模式启用 Strict Mode 时 effect 可能执行两次，清理函数中的 `destroy()` 必须保留。
+
+### GanttInstance 方法
+
+| 方法 | 返回值 | 说明 |
+| --- | --- | --- |
+| `getContainer()` | `HTMLElement` | 获取挂载容器 |
+| `getTasks/getLinks/getMarkers()` | 数据副本 | 读取当前实例数据 |
+| `getConfig()` | `Partial<GanttConfig>` | 读取当前配置 |
+| `setTasks/setLinks/setMarkers(data)` | `void` | 替换实例数据 |
+| `setTask(id, patch)` | `void` | 更新单个任务 |
+| `addTask(task)/removeTask(id)` | `void` | 增删任务 |
+| `setConfig(config)` | `void` | 合并配置 patch |
+| `setSize(width?, height?)` | `void` | 调整实例尺寸 |
+| `scrollToDate/scrollToTask` | `void` | 滚动到日期或任务 |
+| `zoomToFit(padding?)` | `void` | 缩放日期范围以适配视口 |
+| `exportImage(options?)` | `Promise<string>` | 导出当前可视区域 |
+| `enterFullscreen/exitFullscreen/toggleFullscreen` | `Promise<void>` | 控制浏览器全屏 |
+| `openCreateTask/openCreateMarker` | `void` | 打开内置新建编辑器 |
+| `getEngine()` | `GanttEngine \| null` | 获取底层引擎 |
+| `isDestroyed()` | `boolean` | 判断实例是否销毁 |
+| `destroy()` | `void` | 卸载并清理资源，可重复调用 |
+
+当前原生入口复用 Vue 渲染器。非 Vue 项目可以使用该 API，但仍需安装 Vue 3.5+；Vue 和 React 中应在组件挂载后创建实例，并在卸载回调中调用 `destroy()`。Vue 项目优先使用 `GanttChart` 组件，可省去生命周期和数据同步代码。
+
 ## 组件属性
 
 | 属性 | 类型 | 默认值 | 说明 |
@@ -250,9 +383,9 @@ interface GanttTask {
 | `dateFormat` | `string` | `YYYY-MM-DD` | 日期格式标识；当前内置输入仍使用 `YYYY-MM-DD` |
 | `theme` | `light \| dark \| string` | — | 主题名称预留项；当前主题通过 CSS 覆盖 |
 | `visibleRange` | `{ start, end }` | 自动计算 | 初始时间轴范围；边缘拖拽可向两端扩展，重新传入配置时重置 |
-| `columns` | `CustomColumn[]` | 内置列 | 完整替换左侧列 |
+| `columns` | `CustomColumn[]` | 内置列 | 完整替换左侧列；对应的内置编辑字段会同步显示或隐藏 |
 | `customColumns` | `CustomColumn[]` | `[]` | 在默认列后追加自定义列 |
-| `editorFields` | `GanttEditorField[]` | 内置字段 | 控制编辑器字段显示、编辑状态和输入类型 |
+| `editorFields` | `GanttEditorField[]` | 内置字段 | 控制编辑器字段显示、编辑状态和输入类型；明确设置 `visible` 时优先于列配置 |
 | `showPlanBar` | `boolean` | `true` | 是否展示计划条 |
 | `showActualBar` | `boolean` | `true` | 是否展示实际条 |
 | `editablePlan` | `boolean` | `false` | 是否允许拖曳和拉伸计划条 |
@@ -295,7 +428,7 @@ const config: Partial<GanttConfig> = {
 
 ## 左侧自定义列
 
-`columns` 会完整替换默认列；`customColumns` 只会追加到默认列后方。自定义字段通常从 `task.custom[column.key]` 读取。
+`columns` 会完整替换默认列；`customColumns` 只会追加到默认列后方。自定义字段通常从 `task.custom[column.key]` 读取。任务名称、负责人、计划/实际日期和进度等内置列被隐藏或省略时，对应编辑字段也会隐藏；只有明确设置 `editorFields[].visible` 时才会覆盖列联动。
 
 ```ts
 const config: Partial<GanttConfig> = {
@@ -385,8 +518,7 @@ const config: Partial<GanttConfig> = {
   editorFields: [
     { key: "name", label: "任务名称", editable: true },
     { key: "resources", label: "负责人", visible: true, editable: true },
-    { key: "progress", label: "进度", type: "number", editable: false },
-    { key: "calendarId", label: "日历", visible: false }
+    { key: "progress", label: "进度", type: "number", editable: false }
   ]
 }
 ```
@@ -394,6 +526,8 @@ const config: Partial<GanttConfig> = {
 内置字段包括：
 
 `name`、`type`、`parentId`、`planStart`、`planEnd`、`actualStart`、`actualEnd`、`progress`、`resources`、`duration`、`calendarId`、`schedulingMode`、`color`、`planColor`。
+
+默认编辑器只展示常用任务字段。`duration` 是依赖排程使用的持续天数，不等同于实际用时；通常直接由计划开始和计划完成日期推导，无需单独编辑。`calendarId` 使用 `standard`（周一至周五）或 `delivery`（包含周末）作为内部值，界面通过“工作日历”下拉框展示易懂名称；当前版本会保存该配置，但日期拖拽与依赖计算仍按自然日执行。`calendarId`、`schedulingMode`、`color` 和 `planColor` 属于高级字段，默认隐藏；需要时通过 `editorFields[].visible: true` 开启。`schedulingMode: "auto"` 会跟随依赖联动，`"manual"` 则保持手动日期。自定义表格列仅在 `editable: true` 时自动进入编辑器，只读展示列不会占用表单空间；若仍需在弹窗中只读展示，可额外设置对应 `editorFields` 的 `visible: true, editable: false`。
 
 ### 替换整个任务编辑器
 

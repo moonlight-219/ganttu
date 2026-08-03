@@ -61,11 +61,68 @@ pre {
   backdrop-filter: blur(10px);
 }
 
+.playground-header {
+  gap: 14px;
+  padding: 0 26px;
+}
+
 .docs-brand {
   margin-left: 30px;
   color: #111827;
   font-size: 17px;
   font-weight: 700;
+}
+
+button.docs-brand {
+  margin-left: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.playground-tabs {
+  display: flex;
+  align-self: stretch;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.playground-tabs button {
+  position: relative;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.playground-tabs button::after {
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.playground-tabs button.active {
+  color: var(--doc-blue);
+}
+
+.playground-tabs button.active::after {
+  background: var(--doc-blue);
+}
+
+.playground-header .docs-version {
+  margin-left: 0;
+}
+
+.playground-header .docs-lang-toggle {
+  margin-left: auto;
 }
 
 .docs-version {
@@ -370,6 +427,20 @@ li code {
 }
 
 @media (max-width: 980px) {
+  .playground-header {
+    gap: 8px;
+    padding: 0 14px;
+  }
+
+  .playground-tabs {
+    margin-left: 4px;
+  }
+
+  .example-code-center {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
+
   .menu-button {
     display: grid;
     width: 38px;
@@ -444,6 +515,48 @@ li code {
     display: none;
   }
 
+  .playground-header {
+    padding: 0 10px;
+  }
+
+  .playground-header .docs-lang-toggle {
+    display: none;
+  }
+
+  .playground-tabs {
+    align-self: stretch;
+  }
+
+  .playground-tabs button {
+    padding: 0 9px;
+    font-size: 13px;
+  }
+
+  .example-code-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .example-code-controls {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .example-code-tabs {
+    align-self: flex-start;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .example-code-tabs button {
+    flex: 0 0 auto;
+  }
+
+  .example-code-center {
+    padding: 32px 16px 56px;
+  }
+
   .lang-switch {
     display: none;
   }
@@ -495,6 +608,92 @@ li code {
   padding: 80px 34px 0;
   background: linear-gradient(135deg, #f0f4ff 0%, #f8fafc 100%);
   border-bottom: 1px solid var(--doc-border);
+}
+
+.gantt-demo-hero.standalone {
+  margin-left: 0;
+  padding-right: 34px;
+  padding-left: 34px;
+}
+
+.example-code-center {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 44px 34px 80px;
+}
+
+.example-code-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.example-code-heading h1 {
+  margin-bottom: 8px;
+  font-size: 25px;
+}
+
+.example-code-heading p {
+  margin: 0;
+}
+
+.example-code-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.example-code-tabs,
+.example-language-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid #dbe3ee;
+  border-radius: 6px;
+}
+
+.example-code-tabs button,
+.example-language-tabs button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 0;
+  border-right: 1px solid #dbe3ee;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.example-code-tabs button:last-child,
+.example-language-tabs button:last-child {
+  border-right: 0;
+}
+
+.example-code-tabs button.active,
+.example-language-tabs button.active {
+  background: var(--doc-blue);
+  color: #fff;
+}
+
+.example-language-tabs button {
+  min-width: 42px;
+  font-weight: 700;
+}
+
+.example-copy-note {
+  margin: 14px 0 0;
+  color: #526174;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.example-code-block pre {
+  max-height: 680px;
+  padding-top: 44px;
 }
 
 .gantt-demo-hero:fullscreen {
@@ -917,13 +1116,15 @@ li code {
   color: #b91c1c;
 }
 
-.demo-priority.level-medium {
+.demo-priority.level-medium,
+.demo-risk.warning {
   background: #fef3c7;
   color: #b45309;
 }
 
 .demo-priority.level-low,
-.demo-risk {
+.demo-risk.safe,
+.demo-risk:not(.danger):not(.warning) {
   background: #dcfce7;
   color: #15803d;
 }

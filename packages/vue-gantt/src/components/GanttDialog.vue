@@ -9,6 +9,7 @@ const props = defineProps<{
   showDelete?: boolean
   deleteLabel?: string
   ariaLabel?: string
+  panelClass?: string
 }>()
 
 const emit = defineEmits<{
@@ -45,7 +46,7 @@ onBeforeUnmount(() => {
     ></div>
     <aside
       class="gantt-editor"
-      :class="[mode === 'drawer' ? 'gantt-task-drawer' : 'gantt-dialog-modal']"
+      :class="[mode === 'drawer' ? 'gantt-task-drawer' : 'gantt-dialog-modal', panelClass]"
       :aria-label="ariaLabel || title"
     >
       <header>

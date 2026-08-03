@@ -2138,11 +2138,73 @@ describe("GanttChart", () => {
       .find((label) => label.text().includes("负责人"))
       ?.find("input")
     await ownerInput!.setValue("Bob")
+    const progressSlider = wrapper.find(".gantt-progress-editor input[type='range']")
+    expect(progressSlider.exists()).toBe(true)
+    await progressSlider.setValue("73")
     await wrapper.find(".gantt-editor button.primary").trigger("click")
 
     expect(wrapper.emitted("taskChange")?.[0]).toMatchObject([
       "task-1",
-      { name: "Edited child task", resources: ["Bob"] }
+      { name: "Edited child task", resources: ["Bob"], progress: 73 }
+    ])
+  })
+
+  it("applies the dedicated dependency editor layout class", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: linkableTasks,
+        links: [{ id: "source-target", sourceId: "source", targetId: "target", type: "FS" }],
+        config: { viewMode: "day" }
+      }
+    })
+
+    await wrapper.find(".gantt-link-hit").trigger("click")
+
+    expect(wrapper.find(".gantt-dialog-modal").classes()).toContain("gantt-link-editor")
+  })
+
+  it("keeps advanced scheduling controls out of the default task editor", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null }],
+        config: { viewMode: "day" }
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+
+    const editorText = wrapper.find(".gantt-task-drawer").text()
+    expect(editorText).not.toContain("工期")
+    expect(editorText).not.toContain("日历 ID")
+    expect(editorText).not.toContain("排程方式")
+    expect(editorText).not.toContain("实际条颜色")
+    expect(editorText).not.toContain("计划条颜色")
+  })
+
+  it("edits calendarId through understandable work-calendar options", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null, calendarId: "standard" }],
+        config: {
+          viewMode: "day",
+          editorFields: [
+            { key: "calendarId", label: "工作日历", visible: true, editable: true }
+          ]
+        }
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+    const drawer = wrapper.find(".gantt-task-drawer")
+    await drawer.find(".gantt-ui-select-trigger[aria-label='工作日历']").trigger("click")
+    const deliveryOption = drawer.findAll(".gantt-ui-select-menu [role='option']")
+      .find((option) => option.text().includes("连续工作日（包含周末）"))
+    await deliveryOption!.trigger("click")
+    await drawer.find("button.primary").trigger("click")
+
+    expect(wrapper.emitted("taskChange")?.[0]).toMatchObject([
+      "task-1",
+      { calendarId: "delivery" }
     ])
   })
 
@@ -2150,7 +2212,12 @@ describe("GanttChart", () => {
     const wrapper = mount(GanttChart, {
       props: {
         tasks: [{ ...tasks[1], parentId: null }],
-        config: { viewMode: "day" }
+        config: {
+          viewMode: "day",
+          editorFields: [
+            { key: "planColor", label: "计划条颜色", visible: true, editable: true }
+          ]
+        }
       }
     })
 
@@ -2315,7 +2382,7 @@ describe("GanttChart", () => {
           ],
           editorFields: [
             { key: "resources", label: "负责人", visible: false },
-            { key: "progress", label: "进度", editable: false }
+            { key: "progress", label: "进度", visible: true, editable: false }
           ]
         }
       },
@@ -2335,7 +2402,64 @@ describe("GanttChart", () => {
     const progressInput = wrapper.findAll(".gantt-task-drawer label")
       .find((label) => label.text().includes("进度"))
       ?.find("input")
-    expect(progressInput?.attributes("readonly")).toBeDefined()
+    expect(progressInput?.attributes("type")).toBe("range")
+    expect(progressInput?.attributes("disabled")).toBeDefined()
+  })
+
+  it("hides built-in editor fields together with their configured table columns", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null, custom: { priority: "high" } }],
+        config: {
+          viewMode: "day",
+          columns: [
+            { key: "name", label: "任务名称" },
+            { key: "owner", label: "负责人", visible: false },
+            { key: "planStart", label: "计划开始", visible: false },
+            { key: "actualEnd", label: "实际完成" },
+            { key: "priority", label: "优先级", visible: false, editable: true }
+          ],
+          editorFields: [
+            { key: "priority", label: "优先级", editable: true }
+          ]
+        }
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+
+    const editorText = wrapper.find(".gantt-task-drawer").text()
+    expect(editorText).toContain("名称")
+    expect(editorText).toContain("实际完成")
+    expect(editorText).toContain("类型")
+    expect(editorText).not.toContain("负责人")
+    expect(editorText).not.toContain("计划开始")
+    expect(editorText).not.toContain("计划完成")
+    expect(editorText).not.toContain("实际开始")
+    expect(editorText).not.toContain("进度")
+    expect(editorText).not.toContain("优先级")
+  })
+
+  it("allows editorFields to explicitly show a field whose table column is hidden", async () => {
+    const wrapper = mount(GanttChart, {
+      props: {
+        tasks: [{ ...tasks[1], parentId: null }],
+        config: {
+          viewMode: "day",
+          columns: [
+            { key: "name", label: "任务名称" },
+            { key: "owner", label: "负责人", visible: false }
+          ],
+          editorFields: [
+            { key: "resources", label: "负责人", visible: true }
+          ]
+        }
+      }
+    })
+
+    await wrapper.find(".gantt-row").trigger("dblclick")
+
+    expect(wrapper.find(".gantt-task-drawer").text()).toContain("负责人")
   })
 
   it("supports configured columns, scoped cell slots, and custom editor values", async () => {
@@ -2343,7 +2467,7 @@ describe("GanttChart", () => {
       ...tasks[1],
       parentId: null,
       resources: ["Alice"],
-      custom: { budget: 12, code: "LOCKED" }
+      custom: { budget: 12, code: "LOCKED", department: "研发部" }
     }]
     const wrapper = mount(GanttChart, {
       props: {
@@ -2353,7 +2477,11 @@ describe("GanttChart", () => {
           columns: [
             { key: "name", label: "工作项", width: 180, align: "left" },
             { key: "budget", label: "预算", width: 90, type: "number", editable: true },
-            { key: "code", label: "编号", width: 90, editable: false }
+            { key: "code", label: "编号", width: 90, editable: false },
+            { key: "department", label: "部门", width: 90, editable: false }
+          ],
+          editorFields: [
+            { key: "code", label: "编号", visible: true, editable: false }
           ]
         }
       },
@@ -2380,6 +2508,7 @@ describe("GanttChart", () => {
     expect(readonlyInput?.exists()).toBe(true)
     expect(readonlyInput?.attributes("readonly")).toBeDefined()
     expect(readonlyInput?.element.value).toBe("LOCKED")
+    expect(wrapper.find(".gantt-task-drawer").text()).not.toContain("部门")
     await customInput!.setValue("25")
     await wrapper.find(".gantt-editor button.primary").trigger("click")
 

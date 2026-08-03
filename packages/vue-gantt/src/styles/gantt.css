@@ -1423,7 +1423,9 @@ body.gantt-dialog-open {
   max-height: calc(100% - 32px);
   gap: 16px;
   overflow: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 0;
   border: 1px solid rgba(203, 213, 225, 0.74);
   border-top: 3px solid #3b82f6;
@@ -1572,6 +1574,36 @@ body.gantt-dialog-open {
   color: #94a3b8;
   cursor: not-allowed;
   opacity: 0.82;
+}
+
+.gantt-progress-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gantt-progress-editor-heading output {
+  min-width: 48px;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.gantt-editor .gantt-progress-editor input[type="range"] {
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+.gantt-editor .gantt-progress-editor input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .gantt-ui-select,
@@ -1968,6 +2000,7 @@ body.gantt-dialog-open {
 }
 
 .gantt-link-editor {
+  box-sizing: border-box;
   width: min(440px, calc(100% - 32px));
   gap: 16px;
 }

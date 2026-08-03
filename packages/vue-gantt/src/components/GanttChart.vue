@@ -102,8 +102,12 @@ const taskTypeOptions: GanttSelectOption[] = [
   { label: "阶段", value: "summary" }
 ]
 const schedulingModeOptions: GanttSelectOption[] = [
-  { label: "自动", value: "auto" },
-  { label: "手动", value: "manual" }
+  { label: "自动跟随依赖", value: "auto" },
+  { label: "手动固定", value: "manual" }
+]
+const calendarOptions: GanttSelectOption[] = [
+  { label: "标准工作日（周一至周五）", value: "standard" },
+  { label: "连续工作日（包含周末）", value: "delivery" }
 ]
 const linkTypeOptions: GanttSelectOption[] = [
   { label: "FS · 完成-开始", value: "FS" },
@@ -966,11 +970,19 @@ const defaultTaskEditorFields: GanttEditorField[] = [
   { key: "actualEnd", label: "实际完成", type: "date", editable: true },
   { key: "progress", label: "进度", type: "number", editable: true },
   { key: "resources", label: "负责人", type: "text", editable: true },
-  { key: "duration", label: "工期", type: "number", editable: true },
-  { key: "calendarId", label: "日历 ID", type: "text", editable: true },
+  { key: "duration", label: "工期", visible: false, type: "number", editable: true },
+  {
+    key: "calendarId",
+    label: "工作日历",
+    visible: false,
+    type: "select",
+    editable: true,
+    options: calendarOptions
+  },
   {
     key: "schedulingMode",
-    label: "排程方式",
+    label: "依赖排程",
+    visible: false,
     type: "select",
     editable: true,
     options: [
@@ -978,9 +990,34 @@ const defaultTaskEditorFields: GanttEditorField[] = [
       { label: "手动", value: "manual" }
     ]
   },
-  { key: "color", label: "实际条颜色", editable: true },
-  { key: "planColor", label: "计划条颜色", editable: true }
+  { key: "color", label: "实际条颜色", visible: false, editable: true },
+  { key: "planColor", label: "计划条颜色", visible: false, editable: true }
 ]
+
+const editorFieldColumnKeys: Record<string, string> = {
+  name: "name",
+  planStart: "planStart",
+  planEnd: "planEnd",
+  actualStart: "actualStart",
+  actualEnd: "actualEnd",
+  progress: "progress",
+  resources: "owner"
+}
+
+function editorFieldVisible(key: string): boolean {
+  const configuredField = mergedConfig.value.editorFields?.find((field) => field.key === key)
+  if (configuredField?.visible !== undefined) return configuredField.visible
+
+  const configuredColumns = mergedConfig.value.columns
+  const mappedColumnKey = editorFieldColumnKeys[key]
+  const columnKey = mappedColumnKey ?? key
+  const configuredColumn = configuredColumns?.find((column) => column.key === columnKey)
+  if (configuredColumn) return configuredColumn.visible !== false
+  if (configuredColumns?.length && mappedColumnKey !== undefined) return false
+
+  return defaultTaskEditorFields.find((field) => field.key === key)?.visible !== false
+}
+
 const resolvedEditorFields = computed<GanttEditorField[]>(() => {
   const configured = new Map((mergedConfig.value.editorFields ?? []).map((field) => [field.key, field]))
   const customTableFields = tableColumns.value
@@ -996,28 +1033,38 @@ const resolvedEditorFields = computed<GanttEditorField[]>(() => {
     ...(column.editor ?? {}),
     ...(configured.get(column.key) ?? {})
   }))
-  const defaultFields = defaultTaskEditorFields.map((field) => ({
-    ...field,
-    ...(configured.get(field.key) ?? {})
-  }))
+  const defaultFields = defaultTaskEditorFields.map((field) => {
+    const configuredField = configured.get(field.key)
+    return {
+      ...field,
+      ...configuredField,
+      visible: configuredField?.visible ?? editorFieldVisible(field.key)
+    }
+  })
   const fieldKeys = new Set([
     ...defaultFields.map((field) => field.key),
     ...customTableFields.map((field) => field.key)
   ])
   const additionalFields = (mergedConfig.value.editorFields ?? [])
     .filter((field) => !fieldKeys.has(field.key))
+    .map((field) => ({
+      ...field,
+      visible: field.visible ?? editorFieldVisible(field.key)
+    }))
   return [...defaultFields, ...customTableFields, ...additionalFields].filter((field) => field.visible !== false)
 })
 const customEditorColumns = computed<CustomColumn[]>(() => resolvedEditorFields.value.filter((field) =>
   !builtinEditorKeys.has(field.key)
+  && (
+    field.editable === true
+    || mergedConfig.value.editorFields?.some((configured) =>
+      configured.key === field.key && configured.visible === true
+    )
+  )
 ))
 const editableCustomColumns = computed(() => customEditorColumns.value.filter((column) =>
   column.editable === true
 ))
-
-function editorFieldVisible(key: string): boolean {
-  return mergedConfig.value.editorFields?.find((field) => field.key === key)?.visible !== false
-}
 
 function editorFieldEditable(key: string): boolean {
   return mergedConfig.value.editorFields?.find((field) => field.key === key)?.editable !== false
@@ -1078,6 +1125,10 @@ function setSchedulingMode(value: string | number) {
   editDraft.value.schedulingMode = String(value) as NonNullable<GanttTask["schedulingMode"]>
 }
 
+function setCalendarId(value: string | number) {
+  editDraft.value.calendarId = String(value)
+}
+
 function setCustomEditorValue(key: string, value: string | number) {
   editDraft.value.custom[key] = value
 }
@@ -1132,7 +1183,7 @@ function openEditor(task: GanttTask) {
     color: task.color || defaultTaskColor(task.type),
     planColor: task.planColor || defaultPlanColor(),
     resources: task.resources?.join(", ") ?? "",
-    calendarId: task.calendarId ?? "",
+    calendarId: task.calendarId ?? "standard",
     duration: task.duration ?? taskDurationDays(task.actual.start, task.actual.end),
     schedulingMode: task.schedulingMode ?? "auto",
     custom: { ...(task.custom ?? {}) }
@@ -1158,7 +1209,7 @@ function openCreateEditor(type: GanttTask["type"]) {
     color: defaultTaskColor(type),
     planColor: defaultPlanColor(),
     resources: "",
-    calendarId: "",
+    calendarId: "standard",
     duration: type === "milestone" ? 1 : 5,
     schedulingMode: "auto",
     custom: Object.fromEntries(customEditorColumns.value.map((column) => [column.key, ""]))
@@ -3763,31 +3814,46 @@ defineExpose({
           />
         </label>
       </div>
-      <label v-if="editorFieldVisible('progress')">
-        进度
-        <input v-model.number="editDraft.progress" type="number" min="0" max="100" :readonly="!editorFieldEditable('progress')">
+      <label v-if="editorFieldVisible('progress')" class="gantt-progress-editor">
+        <span class="gantt-progress-editor-heading">
+          <span>进度</span>
+          <output>{{ editDraft.progress }}%</output>
+        </span>
+        <input
+          v-model.number="editDraft.progress"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :disabled="!editorFieldEditable('progress')"
+          aria-label="进度"
+        >
       </label>
       <label v-if="editorFieldVisible('resources')">
         负责人
         <input v-model="editDraft.resources" type="text" placeholder="多人请使用逗号分隔" :readonly="!editorFieldEditable('resources')">
       </label>
-      <div class="gantt-editor-grid">
-        <label v-if="editorFieldVisible('duration')">
-          工期
-          <input v-model.number="editDraft.duration" type="number" min="0" :readonly="!editorFieldEditable('duration')">
-        </label>
-        <label v-if="editorFieldVisible('calendarId')">
-          日历 ID
-          <input v-model="editDraft.calendarId" type="text" :readonly="!editorFieldEditable('calendarId')">
-        </label>
-      </div>
+      <label v-if="editorFieldVisible('duration')">
+        排程工期（天）
+        <input v-model.number="editDraft.duration" type="number" min="0" :readonly="!editorFieldEditable('duration')">
+      </label>
+      <label v-if="editorFieldVisible('calendarId')">
+        工作日历
+        <GanttSelect
+          :model-value="editDraft.calendarId"
+          :options="calendarOptions"
+          :disabled="!editorFieldEditable('calendarId')"
+          aria-label="工作日历"
+          @update:model-value="setCalendarId"
+        />
+      </label>
       <label v-if="editorFieldVisible('schedulingMode')">
-        排程方式
+        依赖排程
         <GanttSelect
           :model-value="editDraft.schedulingMode"
           :options="schedulingModeOptions"
           :disabled="!editorFieldEditable('schedulingMode')"
-          aria-label="排程方式"
+          aria-label="依赖排程"
           @update:model-value="setSchedulingMode"
         />
       </label>
@@ -3955,6 +4021,7 @@ defineExpose({
       show-delete
       delete-label="删除依赖"
       aria-label="任务依赖编辑"
+      panel-class="gantt-link-editor"
       @close="closeLinkEditor"
       @save="saveLinkEditor"
       @delete="deleteLink"

@@ -31,7 +31,19 @@ const defaultDemoColumns: CustomColumn[] = [
       { label: "低", value: "low" }
     ]
   },
-  { key: "risk", label: "风险", width: 70, align: "center", editable: true }
+  {
+    key: "risk",
+    label: "风险",
+    width: 70,
+    align: "center",
+    type: "select",
+    editable: true,
+    options: [
+      { label: "高", value: "高" },
+      { label: "中", value: "中" },
+      { label: "低", value: "低" }
+    ]
+  }
 ]
 
 // Gantt 组件的 columnWidth 语义是"每天像素"（computeTimeScale 内部 width = diffDays × columnWidth）。
@@ -95,10 +107,9 @@ const demoConfig = reactive<Partial<GanttConfig>>({
     { key: "actualEnd", label: "实际完成", type: "date", editable: true },
     { key: "progress", label: "进度", type: "number", editable: true },
     { key: "resources", label: "负责人", editable: true },
-    { key: "calendarId", label: "日历 ID", editable: true },
-    { key: "schedulingMode", label: "排程方式", type: "select", editable: true },
-    { key: "color", label: "实际条颜色", editable: true },
-    { key: "planColor", label: "计划条颜色", editable: true },
+    { key: "schedulingMode", label: "依赖排程", visible: true, type: "select", editable: true },
+    { key: "color", label: "实际条颜色", visible: true, editable: true },
+    { key: "planColor", label: "计划条颜色", visible: true, editable: true },
     {
       key: "priority",
       label: "优先级",
@@ -318,10 +329,9 @@ function applyDemoColumns() {
     setting.editable = draft?.editable ?? true
   }
   demoConfig.columns = demoColumnSettings
-    .filter((setting) => setting.visible)
     .map((setting) => {
       const source = defaultDemoColumns.find((column) => column.key === setting.key)!
-      return { ...source, editable: setting.editable }
+      return { ...source, visible: setting.visible, editable: setting.editable }
     })
   demoColumnPanelOpen.value = false
   void saveDemoApi("config", "updateColumns", { columns: demoConfig.columns })
@@ -414,6 +424,14 @@ function handleLinkRejected(rejection: GanttLinkRejection) {
 
 const mobileNavOpen = ref(false)
 const copiedKey = ref("")
+const activePlaygroundPage = ref<"examples" | "docs">("examples")
+const activeExampleCode = ref<"component" | "native" | "vue-native">("component")
+
+function setPlaygroundPage(page: "examples" | "docs") {
+  activePlaygroundPage.value = page
+  mobileNavOpen.value = false
+  window.scrollTo({ top: 0, behavior: "smooth" })
+}
 
 const navigation = [
   { id: "overview", label: "1.1 插件说明" },
@@ -435,17 +453,11 @@ const codeLang = ref<"ts" | "js">("ts")
 // 代码块高亮语言类名，随 codeLang 切换
 const codeClass = computed(() => codeLang.value === "ts" ? "language-typescript" : "language-javascript")
 
-const cdnCode = `<!-- 1. 引入甘特图样式 -->
-<link rel="stylesheet" href="./gantt/style.css" />
+const npmCodeTS = `// 1. 安装组件（项目需使用 Vue 3.5+）
+pnpm add ct-gantt-vue
 
-<!-- 2. 引入 Vue 3 运行环境（CDN 版本） -->
-<script src="./vue.global.prod.js"><\\/script>
-
-<!-- 3. 引入 Vue Gantt UMD 包，依赖 Vue 全局变量 -->
-<script src="./gantt/vue-gantt.umd.cjs"><\\/script>`.replace("<\\/script>", "</" + "script>")
-
-const npmCodeTS = `// 1. 安装依赖（vue 和 ct-gantt-vue 是两个独立包）
-pnpm add vue ct-gantt-core ct-gantt-vue
+// 仅在需要直接调用布局、排程等 Core API 时额外安装
+// pnpm add ct-gantt-core
 
 // 2. 在入口文件（main.ts）或业务组件中引入样式
 import "ct-gantt-vue/style.css"
@@ -460,8 +472,11 @@ import GanttChart, {
   type GanttChartExpose    // 组件 ref 暴露的方法类型
 } from "ct-gantt-vue"`
 
-const npmCodeJS = `// 1. 安装依赖（vue 和 ct-gantt-vue 是两个独立包）
-pnpm add vue ct-gantt-core ct-gantt-vue
+const npmCodeJS = `// 1. 安装组件（项目需使用 Vue 3.5+）
+pnpm add ct-gantt-vue
+
+// 仅在需要直接调用布局、排程等 Core API 时额外安装
+// pnpm add ct-gantt-core
 
 // 2. 在入口文件（main.js）或业务组件中引入样式
 import "ct-gantt-vue/style.css"
@@ -474,16 +489,16 @@ import GanttChart from "ct-gantt-vue"
 const npmCode = computed(() => codeLang.value === "ts" ? npmCodeTS : npmCodeJS)
 
 const containerCode = `<template>
-  <!-- 甘特图容器：必须指定宽高，否则画布渲染异常 -->
+  <!-- width 和 height 也可以通过 config 传入 -->
   <div id="GanttChartDIV" class="gantt-doc-demo">
     <GanttChart
-      :tasks="tasks"          <!-- 必填：任务数据 -->
-      :links="links"          <!-- 可选：任务依赖关系 -->
-      :markers="markers"      <!-- 可选：时间轴里程碑 -->
-      :config="ganttConfig"   <!-- 可选：甘特图配置项 -->
-      height="620px"          <!-- 组件高度，优先级高于 config.height -->
-      @task-change="handleTaskChange"   <!-- 任务变更事件 -->
-      @link-change="handleLinkChange"   <!-- 依赖变更事件 -->
+      :tasks="tasks"
+      :links="links"
+      :markers="markers"
+      :config="ganttConfig"
+      height="620px"
+      @task-change="handleTaskChange"
+      @link-change="handleLinkChange"
     />
   </div>
 </template>`
@@ -538,8 +553,10 @@ const configCodeTS = `const ganttConfig: Partial<GanttConfig> = {
     { key: "actualEnd", label: "实际完成", type: "date", editable: true },
     { key: "progress", label: "进度", type: "number", editable: true },
     { key: "resources", label: "负责人", editable: true },
-    { key: "color", label: "实际条颜色", editable: true },
-    { key: "planColor", label: "计划条颜色", editable: true }
+    // playground 用于展示全部能力；业务项目只需开启实际会用到的高级字段。
+    { key: "schedulingMode", label: "依赖排程", visible: true, type: "select", editable: true },
+    { key: "color", label: "实际条颜色", visible: true, editable: true },
+    { key: "planColor", label: "计划条颜色", visible: true, editable: true },
   ]
 }`
 // JS 版本仅去掉类型标注
@@ -607,36 +624,60 @@ import { ref } from "vue"
 import GanttChart, { type GanttTask, type PatchTask } from "ct-gantt-vue"
 import "ct-gantt-vue/style.css"
 
-// 1. 定义响应式任务数据
-const tasks = ref<GanttTask[]>([])
+const tasks = ref<GanttTask[]>([
+  {
+    id: "task-1",
+    name: "需求确认",
+    type: "task",
+    plan: { start: "2026-08-03", end: "2026-08-07" },
+    actual: { start: "2026-08-03", end: "2026-08-07", progress: 30 }
+  }
+])
 
-// 2. 将 PatchTask（组件回传的扁平变更）合并回完整的 GanttTask 结构
+// 组件使用受控数据流，需要将事件返回的 PatchTask 合并回任务数据。
 function mergeTaskPatch(task: GanttTask, patch: PatchTask): GanttTask {
+  const {
+    planStart,
+    planEnd,
+    actualStart,
+    actualEnd,
+    progress,
+    custom,
+    ...taskFields
+  } = patch
+
   return {
     ...task,
-    ...patch,
+    ...taskFields,
     plan: {
       ...task.plan,
-      start: patch.planStart ?? task.plan.start,   // 计划开始
-      end: patch.planEnd ?? task.plan.end           // 计划完成
+      start: planStart ?? task.plan.start,
+      end: planEnd ?? task.plan.end
     },
     actual: {
       ...task.actual,
-      start: patch.actualStart ?? task.actual.start,  // 实际开始
-      end: patch.actualEnd ?? task.actual.end,         // 实际完成
-      progress: patch.progress ?? task.actual.progress // 进度
+      start: actualStart ?? task.actual.start,
+      end: actualEnd ?? task.actual.end,
+      progress: progress ?? task.actual.progress
     },
-    custom: patch.custom ? { ...task.custom, ...patch.custom } : task.custom  // 自定义字段
+    custom: custom ? { ...task.custom, ...custom } : task.custom
   }
 }
 
-// 3. 处理任务变更事件（拖拽、拉伸、编辑保存等）
 function handleTaskChange(id: string, patch: PatchTask) {
   tasks.value = tasks.value.map((task) =>
     task.id === id ? mergeTaskPatch(task, patch) : task
   )
 }
-<\\/script>`.replace("<\\/script>", "</" + "script>")
+<\\/script>
+
+<template>
+  <GanttChart
+    :tasks="tasks"
+    height="620px"
+    @task-change="handleTaskChange"
+  />
+</template>`.replace("<\\/script>", "</" + "script>")
 
 // JS 版本：<script setup> 去掉 lang="ts" 和所有类型标注
 const createCodeJS = createCodeTS
@@ -646,6 +687,282 @@ const createCodeJS = createCodeTS
   .replaceAll(`: PatchTask`, "")
   .replaceAll(`ref<GanttTask[]>`, `ref`)
 const createCode = computed(() => codeLang.value === "ts" ? createCodeTS : createCodeJS)
+
+const nativeCodeTS = `import {
+  createGantt,
+  type GanttTask
+} from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
+
+// Vite 默认入口需要存在 <div id="app"></div>。
+const app = document.querySelector<HTMLDivElement>("#app")
+if (!app) throw new Error("缺少 #app 容器")
+app.innerHTML = '<div id="gantt" style="width:100%;height:620px"></div>'
+
+// 原生实例接收普通数组，不要求使用 Vue ref。
+const tasks: GanttTask[] = [
+  {
+    id: "task-1",
+    name: "需求确认",
+    type: "task",
+    plan: { start: "2026-08-03", end: "2026-08-07" },
+    actual: { start: "2026-08-03", end: "2026-08-07", progress: 30 }
+  }
+]
+
+// 容器必须已经存在；也可以直接传入 HTMLElement。
+const gantt = createGantt("#gantt", {
+  tasks,
+  height: 620,
+  // 拖拽、编辑完成后触发，可在这里持久化到服务端。
+  onTaskChange(id, patch) {
+    console.log("任务变更", id, patch)
+  }
+})
+
+// 接口重新获取数据后，通过 setter 主动同步到实例。
+gantt.setTasks(tasks)
+
+// 离开页面前销毁，清理事件监听、观察器和动画。
+window.addEventListener("beforeunload", () => gantt.destroy(), { once: true })`
+
+const nativeCodeJS = nativeCodeTS
+  .replace(`,\n  type GanttTask`, "")
+  .replace(`: GanttTask[]`, "")
+  .replace(`<HTMLDivElement>`, "")
+const nativeCode = computed(() => codeLang.value === "ts" ? nativeCodeTS : nativeCodeJS)
+
+const nativeVueCode = `<script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { createGantt, type GanttInstance, type GanttTask } from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
+
+// 原生实例需要一个真实 DOM 容器和一个实例引用。
+const containerRef = ref<HTMLElement | null>(null)
+const tasks = ref<GanttTask[]>([
+  {
+    id: "task-1",
+    name: "需求确认",
+    type: "task",
+    plan: { start: "2026-08-03", end: "2026-08-07" },
+    actual: { start: "2026-08-03", end: "2026-08-07", progress: 30 }
+  }
+])
+let gantt: GanttInstance | null = null
+
+// 必须等待 Vue 完成 DOM 挂载后再创建甘特图。
+onMounted(() => {
+  gantt = createGantt(containerRef.value!, { tasks: tasks.value, height: 620 })
+})
+
+// Vue 业务数据变化时，手动同步到原生实例。
+watch(tasks, (value) => gantt?.setTasks(value), { deep: true })
+
+// Vue 组件卸载时同时销毁甘特图实例。
+onBeforeUnmount(() => gantt?.destroy())
+<\/script>
+
+<template>
+  <div ref="containerRef" class="gantt-container"></div>
+</template>
+
+<style scoped>
+.gantt-container {
+  width: 100%;
+  height: 620px;
+}
+</style>`.replace("<\/script>", "</" + "script>")
+
+const nativeReactCode = `import { useEffect, useRef } from "react"
+import { createGantt, type GanttInstance, type GanttTask } from "ct-gantt-vue"
+
+export function NativeGantt({ tasks }: { tasks: GanttTask[] }) {
+  // 分别保存 DOM 容器和甘特图实例。
+  const containerRef = useRef<HTMLDivElement>(null)
+  const ganttRef = useRef<GanttInstance | null>(null)
+
+  // 首次挂载时创建；effect 清理函数负责销毁。
+  useEffect(() => {
+    ganttRef.current = createGantt(containerRef.current!, { tasks, height: 620 })
+    return () => {
+      ganttRef.current?.destroy()
+      ganttRef.current = null
+    }
+  }, [])
+
+  // React props 更新后，将最新任务同步到实例。
+  useEffect(() => ganttRef.current?.setTasks(tasks), [tasks])
+  return <div ref={containerRef} style={{ width: "100%", height: 620 }} />
+}`
+
+const featureDemoCode = `<script setup lang="ts">
+import { reactive, ref } from "vue"
+import GanttChart, {
+  type GanttChartExpose,
+  type GanttConfig,
+  type GanttLink,
+  type GanttMarker,
+  type GanttTask,
+  type PatchTask
+} from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
+
+// 组件 ref 用于调用导出、全屏、滚动和新建弹窗等公开方法。
+const ganttRef = ref<GanttChartExpose>()
+
+// GanttChart 是受控组件，任务数据由业务侧持有。
+const tasks = ref<GanttTask[]>([
+  {
+    id: "phase-1",
+    name: "项目包 1",
+    type: "summary",
+    plan: { start: "2026-06-01", end: "2026-07-31" },
+    actual: { start: "2026-06-01", end: "2026-07-31", progress: 45 }
+  },
+  {
+    id: "task-1",
+    parentId: "phase-1",
+    name: "任务 1.1",
+    type: "task",
+    plan: { start: "2026-06-10", end: "2026-06-20" },
+    actual: { start: "2026-06-12", end: "2026-06-24", progress: 70 }
+  }
+])
+
+// links 表示计划条依赖，markers 表示时间轴固定里程碑。
+const links = ref<GanttLink[]>([])
+const markers = ref<GanttMarker[]>([
+  { id: "review", name: "方案评审", date: "2026-07-10", color: "#d97706" }
+])
+
+// 所有配置均为可选；这里只展示完整功能演示需要的配置。
+const config = reactive<Partial<GanttConfig>>({
+  viewMode: "month",
+  rowHeight: 44,
+  taskListWidth: 320,
+  showPlanBar: true,
+  showActualBar: true,
+  editablePlan: true,
+  editableActual: true,
+  enableLinkCreation: true,
+  virtualScroll: true,
+  autoSchedule: true
+})
+
+// 组件返回扁平 PatchTask，需要合并回 plan/actual 嵌套数据。
+function handleTaskChange(id: string, patch: PatchTask) {
+  tasks.value = tasks.value.map((task) => {
+    if (task.id !== id) return task
+    const { planStart, planEnd, actualStart, actualEnd, progress, ...fields } = patch
+    return {
+      ...task,
+      ...fields,
+      plan: {
+        ...task.plan,
+        start: planStart ?? task.plan.start,
+        end: planEnd ?? task.plan.end
+      },
+      actual: {
+        ...task.actual,
+        start: actualStart ?? task.actual.start,
+        end: actualEnd ?? task.actual.end,
+        progress: progress ?? task.actual.progress
+      }
+    }
+  })
+}
+
+// 通过组件 ref 调用命令式 API，不需要重新创建组件。
+const exportImage = () => ganttRef.value?.exportImage({ filename: "project-gantt.png" })
+const toggleFullscreen = () => ganttRef.value?.toggleFullscreen()
+const scrollToToday = () => ganttRef.value?.getEngine()?.scrollToDate(new Date())
+const createTask = () => ganttRef.value?.openCreateTask("task")
+const createMarker = () => ganttRef.value?.openCreateMarker()
+<\/script>
+
+<template>
+  <!-- 业务工具栏可以自由组合组件公开方法。 -->
+  <div class="gantt-toolbar">
+    <button type="button" @click="exportImage">导出图片</button>
+    <button type="button" @click="toggleFullscreen">全屏</button>
+    <button type="button" @click="scrollToToday">跳到今天</button>
+    <button type="button" @click="createTask">新建任务</button>
+    <button type="button" @click="createMarker">新建里程碑</button>
+  </div>
+
+  <!-- 创建、删除和编辑事件都需要更新业务侧数组。 -->
+  <GanttChart
+    ref="ganttRef"
+    :tasks="tasks"
+    :links="links"
+    :markers="markers"
+    :config="config"
+    height="620px"
+    @task-change="handleTaskChange"
+    @task-create="tasks.push($event)"
+    @task-delete="tasks = tasks.filter((task) => task.id !== $event)"
+    @link-change="links = $event"
+    @marker-create="markers.push($event)"
+    @marker-change="(id, marker) => markers = markers.map((item) => item.id === id ? marker : item)"
+    @marker-delete="markers = markers.filter((item) => item.id !== $event)"
+  />
+</template>
+
+<style scoped>
+/* 工具栏属于业务页面，可按项目设计系统自由替换。 */
+.gantt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.gantt-toolbar button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid #d5deec;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+</style>`.replace("<\/script>", "</" + "script>")
+
+const featureDemoCodeJS = featureDemoCode
+  .replace(` lang="ts"`, "")
+  .replace(
+    `import GanttChart, {
+  type GanttChartExpose,
+  type GanttConfig,
+  type GanttLink,
+  type GanttMarker,
+  type GanttTask,
+  type PatchTask
+} from "ct-gantt-vue"`,
+    `import GanttChart from "ct-gantt-vue"`
+  )
+  .replaceAll(`<GanttChartExpose>`, "")
+  .replaceAll(`<GanttTask[]>`, "")
+  .replaceAll(`<GanttLink[]>`, "")
+  .replaceAll(`<GanttMarker[]>`, "")
+  .replaceAll(`<Partial<GanttConfig>>`, "")
+  .replace(`id: string, patch: PatchTask`, `id, patch`)
+
+const nativeVueCodeJS = nativeVueCode
+  .replace(` lang="ts"`, "")
+  .replace(
+    `import { createGantt, type GanttInstance, type GanttTask } from "ct-gantt-vue"`,
+    `import { createGantt } from "ct-gantt-vue"`
+  )
+  .replaceAll(`<HTMLElement | null>`, "")
+  .replaceAll(`<GanttTask[]>`, "")
+  .replace(`let gantt: GanttInstance | null = null`, `let gantt = null`)
+  .replace(`containerRef.value!`, `containerRef.value`)
+
+const selectedExampleCode = computed(() => {
+  if (activeExampleCode.value === "native") return codeLang.value === "ts" ? nativeCodeTS : nativeCodeJS
+  if (activeExampleCode.value === "vue-native") return codeLang.value === "ts" ? nativeVueCode : nativeVueCodeJS
+  return codeLang.value === "ts" ? featureDemoCode : featureDemoCodeJS
+})
 
 const customSlotCode = `<GanttChart :tasks="tasks" :config="{ columns }">
   <!-- 自定义左侧表格「优先级」列的展示 -->
@@ -665,41 +982,48 @@ const customSlotCode = `<GanttChart :tasks="tasks" :config="{ columns }">
 const externalEditorCode = `<GanttChart
   :tasks="tasks"
   :config="{
-    builtInTaskEditor: false,     <!-- 关闭内置任务抽屉 -->
-    builtInMarkerEditor: false    <!-- 关闭内置里程碑弹窗 -->
+    builtInTaskEditor: false,
+    builtInMarkerEditor: false
   }"
-  @task-edit-request="openTaskDrawer"        <!-- 双击 / 编辑按钮 → 打开外部任务抽屉 -->
-  @marker-edit-request="openMarkerDialog"    <!-- 双击里程碑 → 打开外部里程碑弹窗 -->
+  @task-edit-request="openTaskDrawer"
+  @marker-edit-request="openMarkerDialog"
 />`
 
 const exportImageCodeTS = `<script setup lang="ts">
 import { ref } from "vue"
-import GanttChart, { type GanttChartExpose } from "ct-gantt-vue"
+import GanttChart, { type GanttChartExpose, type GanttTask } from "ct-gantt-vue"
+import "ct-gantt-vue/style.css"
 
-// 1. 获取组件 ref，用于调用公开方法
 const ganttRef = ref<GanttChartExpose>()
+const tasks = ref<GanttTask[]>([
+  {
+    id: "task-1",
+    name: "需求确认",
+    type: "task",
+    plan: { start: "2026-08-03", end: "2026-08-07" },
+    actual: { start: "2026-08-03", end: "2026-08-07", progress: 30 }
+  }
+])
 
-// 2. 导出甘特图为图片
 async function exportGanttImage() {
-  // 导出当前可视区域，默认触发浏览器下载
-  const dataUrl = await ganttRef.value?.exportImage({
-    filename: "project-gantt.png",  // 下载文件名
-    pixelRatio: 2                   // 高清导出（2 倍分辨率）
+  await ganttRef.value?.exportImage({
+    filename: "project-gantt.png",
+    pixelRatio: 2
   })
-  // 如果不希望自动下载，可传 download: false，仅获取 data URL
 }
 <\\/script>
 
 <template>
-  <!-- 通过 ref 绑定组件实例 -->
-  <GanttChart ref="ganttRef" :tasks="tasks" />
+  <button type="button" @click="exportGanttImage">导出图片</button>
+  <GanttChart ref="ganttRef" :tasks="tasks" height="620px" />
 </template>`.replace("<\\/script>", "</" + "script>")
 
 // JS 版本：去掉 lang="ts" 和 ref 泛型
 const exportImageCodeJS = exportImageCodeTS
   .replace(` lang="ts"`, "")
-  .replace(`import GanttChart, { type GanttChartExpose } from "ct-gantt-vue"`, `import GanttChart from "ct-gantt-vue"`)
+  .replace(`import GanttChart, { type GanttChartExpose, type GanttTask } from "ct-gantt-vue"`, `import GanttChart from "ct-gantt-vue"`)
   .replaceAll(`<GanttChartExpose>`, "")
+  .replaceAll(`<GanttTask[]>`, "")
 const exportImageCode = computed(() => codeLang.value === "ts" ? exportImageCodeTS : exportImageCodeJS)
 
 const propRows = [
@@ -708,7 +1032,13 @@ const propRows = [
   ["markers", "GanttMarker[]", "否", "时间轴上的里程碑标识。"],
   ["config", "Partial<GanttConfig>", "否", "甘特图配置对象。"],
   ["width", "string | number", "否", "组件宽度，优先级高于 config.width。"],
-  ["height", "string | number", "否", "组件高度，优先级高于 config.height。"]
+  ["height", "string | number", "否", "组件高度，优先级高于 config.height。"],
+  ["onTaskChange", "(id, patch) => void", "否", "task-change 的同名回调属性。"],
+  ["onTaskCreate / onTaskDelete", "function", "否", "task-create / task-delete 的同名回调属性。"],
+  ["onTaskEditRequest", "(request) => void", "否", "task-edit-request 的同名回调属性。"],
+  ["onMarkerCreate / onMarkerChange / onMarkerDelete", "function", "否", "里程碑增删改事件的同名回调属性。"],
+  ["onMarkerEditRequest", "(request) => void", "否", "marker-edit-request 的同名回调属性。"],
+  ["onLinkChange / onLinkRejected", "function", "否", "依赖变更与拒绝事件的同名回调属性。"]
 ]
 
 const configRows = [
@@ -719,14 +1049,14 @@ const configRows = [
   ["headerHeight", "number", "50", "表头高度。"],
   ["taskListWidth", "number", "280", "左侧表格宽度。"],
   ["width / height", "string | number", "100% / 620px", "甘特图整体宽高。"],
-  ["locale", "string", "zh-CN", "本地化标识。"],
+  ["locale", "string", "zh-CN", "预留的本地化标识，当前不会改变界面文案。"],
   ["firstDayOfWeek", "0 | 1", "0", "周起始日，0 表示周日，1 表示周一。"],
-  ["dateFormat", "string", "YYYY-MM-DD", "日期格式配置。"],
-  ["theme", "light | dark | string", "light", "主题标识，当前主要用于业务扩展。"],
+  ["dateFormat", "string", "YYYY-MM-DD", "预留的日期格式，当前日期输入输出仍使用组件既有格式。"],
+  ["theme", "light | dark | string", "-", "预留的主题标识，当前不会自动切换组件样式。"],
   ["visibleRange", "{ start; end }", "自动计算", "初始显示范围；边缘拖拽可向两端继续扩展。"],
-  ["columns", "CustomColumn[]", "内置列", "完整替换左侧表格列。"],
+  ["columns", "CustomColumn[]", "内置列", "完整替换左侧表格列，并同步对应编辑字段的显隐。"],
   ["customColumns", "CustomColumn[]", "[]", "在内置列后追加自定义列。"],
-  ["editorFields", "GanttEditorField[]", "内置字段", "控制任务编辑抽屉的字段。"],
+  ["editorFields", "GanttEditorField[]", "内置字段", "控制任务编辑抽屉字段；明确设置 visible 时优先于列配置。"],
   ["editable", "boolean", "true", "总编辑开关，关闭后任务条不可拖拽编辑。"],
   ["showPlanBar", "boolean", "true", "是否显示计划条；关闭后依赖线和依赖创建入口会同步隐藏。"],
   ["showActualBar", "boolean", "true", "是否显示实际条。"],
@@ -752,7 +1082,7 @@ const taskRows = [
   ["dependencies", "Dependency[]", "否", "任务自身依赖声明，通常也可通过 links 统一传入。"],
   ["color", "string", "否", "实际条颜色。"],
   ["planColor", "string", "否", "计划条颜色。"],
-  ["calendarId", "string", "否", "任务日历 ID。"],
+  ["calendarId", "standard | delivery", "否", "工作日历：standard 为周一至周五，delivery 包含周末。"],
   ["resources", "string[]", "否", "负责人列表。"],
   ["segments", "Array<{ start; end }>", "否", "预留的分段任务字段，当前视图暂未拆段渲染。"],
   ["constraint", "{ type; date? }", "否", "任务约束，Core 排程影响分析中会用于冲突判断。"],
@@ -839,7 +1169,7 @@ const patchRows = [
   ["color / planColor", "string", "实际条或计划条颜色编辑保存时返回。"],
   ["duration / schedulingMode", "number / auto | manual", "工期或排程方式编辑保存时返回。"],
   ["resources", "string[]", "负责人编辑保存时返回。"],
-  ["calendarId", "string", "日历 ID 编辑保存时返回。"],
+  ["calendarId", "standard | delivery", "工作日历选择保存时返回内部标识。"],
   ["custom", "Record<string, unknown>", "自定义字段编辑保存时返回。"]
 ]
 
@@ -876,7 +1206,51 @@ const slotRows = [
 ]
 
 const methodRows = [
-  ["exportImage(options?)", "Promise<string>", "导出当前可视区域为图片，默认下载并返回 data URL。"]
+  ["exportImage(options?)", "Promise<string>", "导出当前可视区域为图片，默认下载并返回 data URL。"],
+  ["enterFullscreen()", "Promise<void>", "进入浏览器全屏。"],
+  ["exitFullscreen()", "Promise<void>", "退出浏览器全屏。"],
+  ["toggleFullscreen()", "Promise<void>", "切换浏览器全屏状态。"],
+  ["openCreateTask(type?)", "void", "打开新建任务、阶段或里程碑抽屉；type 默认为 task。"],
+  ["openCreateMarker()", "void", "打开新建时间轴里程碑弹窗。"],
+  ["getEngine()", "GanttEngine | null", "获取命令式引擎实例，可调用 scrollToDate、zoomToFit、setTask 等方法。"]
+]
+
+const nativeOptionRows = [
+  ["tasks", "GanttTask[]", "[]", "初始任务、阶段和任务型里程碑。"],
+  ["links", "GanttLink[]", "[]", "初始依赖关系。"],
+  ["markers", "GanttMarker[]", "[]", "初始时间轴里程碑。"],
+  ["config", "Partial<GanttConfig>", "{}", "甘特图配置。"],
+  ["width", "string | number", "100%", "实例宽度，数字按像素处理。"],
+  ["height", "string | number", "620px", "实例高度，数字按像素处理。"],
+  ["onTaskChange / Create / Delete", "function", "-", "任务变更、创建和删除回调。"],
+  ["onTaskEditRequest", "function", "-", "关闭内置任务编辑器后的编辑请求。"],
+  ["onMarkerCreate / Change / Delete", "function", "-", "时间轴里程碑增删改回调。"],
+  ["onMarkerEditRequest", "function", "-", "关闭内置里程碑编辑器后的编辑请求。"],
+  ["onLinkChange / onLinkRejected", "function", "-", "依赖变更和拒绝回调。"]
+]
+
+const integrationModeRows = [
+  ["Vue 组件", "Vue 项目（推荐）", "自动处理挂载和销毁；父组件通过 props 与事件维护受控数据。"],
+  ["createGantt", "原生 HTML、Vue、React 等浏览器项目", "手动处理生命周期；实例自动维护交互数据，外部数据通过 setter 同步。"]
+]
+
+const nativeMethodRows = [
+  ["getContainer()", "HTMLElement", "获取实例挂载容器。"],
+  ["getTasks() / getLinks() / getMarkers()", "数据副本", "读取当前实例数据，不直接暴露内部数组。"],
+  ["getConfig()", "Partial<GanttConfig>", "读取当前实例配置副本。"],
+  ["setTasks(tasks) / setLinks(links) / setMarkers(markers)", "void", "用外部业务数据替换实例数据。"],
+  ["setTask(id, patch)", "void", "使用 PatchTask 更新单个任务。"],
+  ["addTask(task) / removeTask(id)", "void", "以命令方式新增或删除任务。"],
+  ["setConfig(config)", "void", "合并配置 patch，不会清空未传配置。"],
+  ["setSize(width?, height?)", "void", "调整实例宽高。"],
+  ["scrollToDate(date) / scrollToTask(id)", "void", "滚动到指定日期或任务。"],
+  ["zoomToFit(padding?)", "void", "调整列宽，使任务日期范围适配视口。"],
+  ["exportImage(options?)", "Promise<string>", "导出当前可视区域。"],
+  ["enterFullscreen / exitFullscreen / toggleFullscreen", "Promise<void>", "控制浏览器全屏。"],
+  ["openCreateTask(type?) / openCreateMarker()", "void", "打开内置新建编辑器。"],
+  ["getEngine()", "GanttEngine | null", "获取底层命令式引擎。"],
+  ["isDestroyed()", "boolean", "判断实例是否已销毁。"],
+  ["destroy()", "void", "卸载界面并清理监听器、观察器和动画；可重复调用。"]
 ]
 
 const exportOptionRows = [
@@ -932,8 +1306,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize)
 })
 
-// 切换 TS/JS 后重新高亮
-watch(codeLang, async () => {
+// 切换语言、页面或示例代码后重新高亮。
+watch([codeLang, activePlaygroundPage, activeExampleCode], async () => {
   await nextTick()
   // 清除已高亮的标记，否则 highlightAll 会跳过
   document.querySelectorAll(".code-block code").forEach((el) => {
@@ -946,7 +1320,43 @@ watch(codeLang, async () => {
 
 <template>
   <div class="docs-page">
-    <section class="gantt-demo-hero" data-gantt-fullscreen-root>
+    <header class="docs-header playground-header">
+      <button
+        v-if="activePlaygroundPage === 'docs'"
+        class="menu-button"
+        type="button"
+        aria-label="打开目录"
+        :aria-expanded="mobileNavOpen"
+        @click="mobileNavOpen = !mobileNavOpen"
+      >
+        <span></span><span></span><span></span>
+      </button>
+      <button type="button" class="docs-brand" @click="setPlaygroundPage('examples')">Vue Gantt</button>
+      <nav class="playground-tabs" aria-label="Playground 页面">
+        <button
+          type="button"
+          :class="{ active: activePlaygroundPage === 'examples' }"
+          @click="setPlaygroundPage('examples')"
+        >
+          功能示例
+        </button>
+        <button
+          type="button"
+          :class="{ active: activePlaygroundPage === 'docs' }"
+          @click="setPlaygroundPage('docs')"
+        >
+          使用文档
+        </button>
+      </nav>
+      <span class="docs-version">v0.1.0</span>
+      <div class="docs-lang-toggle" aria-label="示例代码语言">
+        <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+        <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+      </div>
+    </header>
+
+    <template v-if="activePlaygroundPage === 'examples'">
+    <section class="gantt-demo-hero standalone" data-gantt-fullscreen-root>
       <div class="gantt-demo-toolbar">
         <div class="toolbar-row toolbar-row-primary">
           <div class="toolbar-info">
@@ -1086,28 +1496,55 @@ watch(codeLang, async () => {
         @marker-edit-request="handleMarkerEditRequest"
       >
         <template #cell-priority="{ value }">
-          <span class="demo-priority" :class="`level-${value || 'medium'}`">
+          <span
+            class="demo-priority"
+            :class="`level-${value || 'medium'}`"
+            title="业务优先级，仅用于排序和资源取舍，不参与日期排程"
+          >
             {{ value === "high" ? "高" : value === "low" ? "低" : "中" }}
           </span>
         </template>
         <template #cell-risk="{ value }">
-          <span class="demo-risk" :class="{ danger: value === '高' }">{{ value || "低" }}</span>
+          <span
+            class="demo-risk"
+            :class="{ danger: value === '高', warning: value === '中', safe: value === '低' }"
+            title="风险等级，用于提示延期或交付风险，不参与日期排程"
+          >{{ value || "低" }}</span>
         </template>
       </GanttChart>
     </section>
-    <header class="docs-header">
-      <button
-        class="menu-button"
-        type="button"
-        aria-label="打开目录"
-        :aria-expanded="mobileNavOpen"
-        @click="mobileNavOpen = !mobileNavOpen"
-      >
-        <span></span><span></span><span></span>
-      </button>
-      <a class="docs-brand" href="#overview" @click="closeMobileNav">Vue Gantt 使用文档</a>
-      <span class="docs-version">v0.1.0</span>
-    </header>
+
+    <section class="example-code-center">
+      <div class="example-code-heading">
+        <div>
+          <h1>功能示例代码</h1>
+          <p>上方演示与组件使用同一套数据、配置和公开 API，可按接入方式查看并复制代码。</p>
+        </div>
+        <div class="example-code-controls">
+          <div class="example-code-tabs" role="tablist" aria-label="示例代码类型">
+            <button type="button" :class="{ active: activeExampleCode === 'component' }" @click="activeExampleCode = 'component'">Vue 组件</button>
+            <button type="button" :class="{ active: activeExampleCode === 'native' }" @click="activeExampleCode = 'native'">原生实例</button>
+            <button type="button" :class="{ active: activeExampleCode === 'vue-native' }" @click="activeExampleCode = 'vue-native'">Vue 原生接入</button>
+          </div>
+          <div class="example-language-tabs" role="group" aria-label="示例代码语言">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </div>
+        </div>
+      </div>
+      <p class="example-copy-note">
+        复制前先安装 <code>vue@^3.5.0</code> 和 <code>ct-gantt-vue</code>；Vue 组件与 Vue 原生接入代码保存为
+        <code>.vue</code> 文件，原生实例代码放入 Vite 的 <code>main.ts</code> 或 <code>main.js</code>，并保留默认
+        <code>#app</code> 容器。
+      </p>
+      <div class="code-block example-code-block">
+        <button type="button" @click="copyCode('feature-example', selectedExampleCode)">{{ copiedKey === "feature-example" ? "已复制" : "复制" }}</button>
+        <pre><code :class="codeClass">{{ selectedExampleCode }}</code></pre>
+      </div>
+    </section>
+    </template>
+
+    <template v-else>
 
     <aside class="docs-nav" :class="{ open: mobileNavOpen }">
       <strong>目录</strong>
@@ -1139,17 +1576,10 @@ watch(codeLang, async () => {
 
       <section id="install" class="doc-section">
         <h1>1.2. 引用 Vue Gantt 插件</h1>
-        <p>在页面或项目中引用插件，可根据项目构建方式选择普通引用或 npm 引用。</p>
-        <ul>
-          <li>普通 JS 引用</li>
-        </ul>
-        <div class="code-block">
-          <button type="button" @click="copyCode('cdn', cdnCode)">{{ copiedKey === "cdn" ? "已复制" : "复制" }}</button>
-          <pre><code class="language-xml">{{ cdnCode }}</code></pre>
-        </div>
-        <ul>
-          <li>npm 引用</li>
-        </ul>
+        <p>
+          当前发布包面向 Vue 构建工具项目，请通过 npm、pnpm 或 yarn 安装，不提供可直接通过
+          <code>&lt;script&gt;</code> 标签引用的独立浏览器包。
+        </p>
         <div class="code-block">
           <button type="button" @click="copyCode('npm', npmCode)">{{ copiedKey === "npm" ? "已复制" : "复制" }}</button>
           <span class="lang-switch">
@@ -1191,8 +1621,10 @@ watch(codeLang, async () => {
           </div>
         </div>
         <p class="doc-hint">
-          说明：<code>columns</code> 会完整替换左侧表格列；<code>customColumns</code> 会在内置列后追加列。
+          说明：<code>columns</code> 会完整替换左侧表格列，并同步隐藏对应的任务编辑字段；
+          <code>customColumns</code> 会在内置列后追加列；只有明确设置 <code>editorFields.visible</code> 才会覆盖该联动。
           自定义列如果需要进入任务编辑抽屉，请设置 <code>editable: true</code>，并按需要补充 <code>type</code>、<code>options</code> 或 <code>editor</code>。
+          <code>locale</code>、<code>dateFormat</code> 和 <code>theme</code> 当前为预留配置，不会改变组件渲染结果。
         </p>
         <h2>CustomColumn 字段说明</h2>
         <div class="doc-table four-cols">
@@ -1270,10 +1702,16 @@ watch(codeLang, async () => {
       </section>
 
       <section id="create" class="doc-section">
-        <h1>1.6. 创建甘特图对象</h1>
+        <h1>1.6. 渲染或创建甘特图</h1>
+        <div class="doc-table three-cols">
+          <div class="table-head"><span>接入方式</span><span>适用场景</span><span>数据与生命周期</span></div>
+          <div v-for="row in integrationModeRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
+          </div>
+        </div>
         <p>
-          在 Vue 中不需要手动实例化对象，只需要渲染 <code>GanttChart</code> 组件。
-          拖拽、拉伸、编辑保存等操作会触发事件，业务侧在事件中更新数据。
+          Vue 项目推荐直接渲染 <code>GanttChart</code> 组件。
+          组件采用受控数据流，拖拽、拉伸和编辑保存后需要在事件中更新业务数据。
         </p>
         <div class="code-block">
           <button type="button" @click="copyCode('create', createCode)">{{ copiedKey === "create" ? "已复制" : "复制" }}</button>
@@ -1283,11 +1721,37 @@ watch(codeLang, async () => {
           </span>
           <pre><code :class="codeClass">{{ createCode }}</code></pre>
         </div>
+        <h2>原生实例方式</h2>
+        <p>
+          原生 HTML、Vue、React 或其他浏览器框架也可以调用 <code>createGantt(container, options)</code>。
+          实例会自动回写界面内发生的增删改；外部数据变化时调用 setter，同一容器不允许重复挂载，卸载时必须调用 <code>destroy()</code>。
+        </p>
+        <div class="code-block tall">
+          <button type="button" @click="copyCode('native', nativeCode)">{{ copiedKey === "native" ? "已复制" : "复制" }}</button>
+          <span class="lang-switch">
+            <button type="button" :class="{ active: codeLang === 'ts' }" @click="codeLang = 'ts'">TS</button>
+            <button type="button" :class="{ active: codeLang === 'js' }" @click="codeLang = 'js'">JS</button>
+          </span>
+          <pre><code :class="codeClass">{{ nativeCode }}</code></pre>
+        </div>
+        <p class="doc-hint">
+          当前原生入口复用 Vue 渲染器；非 Vue 项目使用时仍需安装 Vue 3.5+。Vue/React 中应分别在 mounted/useEffect 后创建，并在卸载回调中销毁。
+        </p>
+        <h2>在 Vue 中使用原生实例</h2>
+        <div class="code-block tall">
+          <button type="button" @click="copyCode('native-vue', nativeVueCode)">{{ copiedKey === "native-vue" ? "已复制" : "复制" }}</button>
+          <pre><code class="language-typescript">{{ nativeVueCode }}</code></pre>
+        </div>
+        <h2>在 React 中使用原生实例</h2>
+        <div class="code-block tall">
+          <button type="button" @click="copyCode('native-react', nativeReactCode)">{{ copiedKey === "native-react" ? "已复制" : "复制" }}</button>
+          <pre><code class="language-typescript">{{ nativeReactCode }}</code></pre>
+        </div>
       </section>
 
       <section id="props" class="doc-section">
         <h1>1.7. 甘特图组件属性</h1>
-        <p>组件属性用于传入数据、配置和尺寸。</p>
+        <p>组件属性用于传入数据、配置和尺寸；所有事件也可以通过对应的 <code>onXxx</code> 回调属性监听。</p>
         <div class="doc-table four-cols">
           <div class="table-head"><span>属性</span><span>类型</span><span>必填</span><span>说明</span></div>
           <div v-for="row in propRows" :key="row[0]" class="table-row">
@@ -1358,13 +1822,27 @@ watch(codeLang, async () => {
 
       <section id="methods" class="doc-section">
         <h1>1.10. 甘特图组件方法</h1>
-        <p>通过组件 ref 可以调用公开方法。导出图片会返回 data URL，默认同时触发下载。</p>
+        <p>通过组件 ref 可以调用导出、全屏、打开新建编辑器和获取引擎等公开方法。</p>
         <p class="doc-hint">
           当前 <code>exportImage</code> 导出的是当前可视区域，适合大数据场景下快速保存当前视图；如果需要导出全部行，建议业务侧做分页或分片导出。
         </p>
         <div class="doc-table three-cols">
           <div class="table-head"><span>方法</span><span>返回值</span><span>说明</span></div>
           <div v-for="row in methodRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
+          </div>
+        </div>
+        <h2>CreateGanttOptions</h2>
+        <div class="doc-table four-cols">
+          <div class="table-head"><span>参数</span><span>类型</span><span>默认值</span><span>说明</span></div>
+          <div v-for="row in nativeOptionRows" :key="row[0]" class="table-row">
+            <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span><span>{{ row[3] }}</span>
+          </div>
+        </div>
+        <h2>createGantt 实例方法</h2>
+        <div class="doc-table three-cols">
+          <div class="table-head"><span>方法</span><span>返回值</span><span>说明</span></div>
+          <div v-for="row in nativeMethodRows" :key="row[0]" class="table-row">
             <code>{{ row[0] }}</code><span>{{ row[1] }}</span><span>{{ row[2] }}</span>
           </div>
         </div>
@@ -1407,10 +1885,12 @@ watch(codeLang, async () => {
           <li>计划条被依赖约束限制时会触发 <code>link-rejected</code>，其中 <code>reason</code> 为 <code>constraint</code>。</li>
           <li>里程碑当前按日期固定展示在时间轴上，不随表格滚动，也不支持上下自由拖拽；如需特殊位置样式，建议通过里程碑编辑器或自定义样式扩展。</li>
           <li>计划条颜色由 <code>planColor</code> 控制，实际条颜色由 <code>color</code> 控制，两者互不跟随。</li>
-          <li>左侧自定义列如果需要参与编辑，请同时设置 <code>editable</code>、<code>type</code> 和必要的 <code>options</code>。</li>
+          <li>工期、日历 ID、排程方式和任务条颜色属于高级编辑字段，默认隐藏；需要时通过 <code>editorFields.visible</code> 开启。</li>
+          <li>左侧自定义列只有设置 <code>editable: true</code> 才自动进入编辑器，并应同时设置 <code>type</code> 和必要的 <code>options</code>。</li>
           <li>如果不需要内置弹窗，可关闭 <code>builtInTaskEditor</code> 或使用对应插槽完全替换。</li>
         </ul>
       </section>
     </main>
+    </template>
   </div>
 </template>
